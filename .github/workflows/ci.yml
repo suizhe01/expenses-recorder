@@ -1,0 +1,72 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    name: ci
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: expenses
+          POSTGRES_PASSWORD: expenses
+          POSTGRES_DB: expenses
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U expenses -d expenses"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgres://expenses:expenses@localhost:5432/expenses
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint --workspace apps/api
+
+      - name: Typecheck
+        run: npm run typecheck --workspace apps/api
+
+      - name: Test
+        run: npm run test --workspace apps/api
+
+      - name: Migrate
+        run: npm run migrate --workspace apps/api
+
+      # AC-4: running migrations twice must be a no-op.
+      - name: Migrate again (idempotency)
+        run: npm run migrate --workspace apps/api
+
+      - name: Verify users table shape
+        run: |
+          psql "$DATABASE_URL" -c '\d users'
+          psql "$DATABASE_URL" -tAc "
+            SELECT string_agg(column_name, ',' ORDER BY column_name)
+            FROM information_schema.columns
+            WHERE table_name = 'users'
+          " | grep -qx 'created_at,email,google_sub,id,password_hash,updated_at'
+
+      - name: Migrate down
+        run: npm run migrate:down --workspace apps/api

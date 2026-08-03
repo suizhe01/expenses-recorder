@@ -1,0 +1,17 @@
+{
+  "name": "expenses-recorder",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "apps/*"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "lint": "npm run lint --workspace apps/api",
+    "typecheck": "npm run typecheck --workspace apps/api",
+    "test": "npm run test --workspace apps/api",
+    "migrate": "npm run migrate --workspace apps/api"
+  }
+}
