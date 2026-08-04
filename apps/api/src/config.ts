@@ -20,6 +20,11 @@ const configSchema = z.object({
   LOG_LEVEL: z
     .enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'])
     .default('info'),
+  // HS256 signing key for access tokens. 32 characters is the floor for a
+  // secret that must resist offline brute force if a token ever leaks.
+  JWT_SECRET: z
+    .string()
+    .min(32, { message: 'must be at least 32 characters' }),
 });
 
 export type Config = z.infer<typeof configSchema>;

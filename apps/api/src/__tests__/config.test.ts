@@ -3,6 +3,7 @@ import { ConfigError, parseConfig } from '../config.js';
 
 const validEnv = {
   DATABASE_URL: 'postgres://user:pass@localhost:5432/expenses',
+  JWT_SECRET: 'a'.repeat(32),
 };
 
 describe('parseConfig', () => {
@@ -49,5 +50,26 @@ describe('parseConfig', () => {
 
   it('coerces a numeric PORT string', () => {
     expect(parseConfig({ ...validEnv, PORT: '8080' }).PORT).toBe(8080);
+  });
+
+  // AC-12
+  it('rejects a missing JWT_SECRET and names it', () => {
+    try {
+      parseConfig({ DATABASE_URL: validEnv.DATABASE_URL });
+      expect.unreachable('parseConfig should have thrown');
+    } catch (error) {
+      expect((error as ConfigError).issues.join('\n')).toContain('JWT_SECRET');
+    }
+  });
+
+  it('rejects a JWT_SECRET shorter than 32 characters and names it', () => {
+    try {
+      parseConfig({ ...validEnv, JWT_SECRET: 'tooshort' });
+      expect.unreachable('parseConfig should have thrown');
+    } catch (error) {
+      const message = (error as ConfigError).issues.join('\n');
+      expect(message).toContain('JWT_SECRET');
+      expect(message).toContain('32');
+    }
   });
 });

@@ -93,13 +93,44 @@ starts half-configured.
 | `PORT` | no | `3000` | Host port the API is published on |
 | `LOG_LEVEL` | no | `info` | One of `fatal`, `error`, `warn`, `info`, `debug`, `trace`, `silent` |
 | `DATABASE_URL` | **yes** | — | Postgres connection string. Must start `postgres://` or `postgresql://` |
+| `JWT_SECRET` | **yes** | — | HS256 signing key for access tokens. Minimum 32 characters. Changing it invalidates every issued access token |
 | `POSTGRES_USER` | no | `expenses` | Database user created by the Postgres container |
 | `POSTGRES_PASSWORD` | no | `expenses` | Password for that user. Local development only |
 | `POSTGRES_DB` | no | `expenses` | Database created by the Postgres container |
 | `POSTGRES_PORT` | no | `5433` | Host port for the compose database. Not 5432, so it does not collide with a Postgres already installed on the machine |
 
-`DATABASE_URL` is the only required variable, and `.env.example` already
-supplies a working value.
+`DATABASE_URL` and `JWT_SECRET` are the required variables, and `.env.example`
+supplies working values for both. The `JWT_SECRET` placeholder is for local
+development only — generate a real one before the API is reachable from
+anywhere else:
+
+```bash
+node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"
+```
+
+## Authentication
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| POST | `/auth/register` | Create an account, returns both tokens |
+| POST | `/auth/login` | Exchange credentials for both tokens |
+| POST | `/auth/refresh` | Rotate: returns a new access AND refresh token |
+| POST | `/auth/logout` | Revoke the presented session only |
+| GET | `/auth/me` | The caller's account, via `Authorization: Bearer <accessToken>` |
+
+Access tokens are HS256 JWTs valid for 15 minutes. Refresh tokens are opaque
+random strings valid for 90 days, stored only as a SHA-256 hash.
+
+Refresh **rotates**: each call returns a new refresh token and retires the old
+one. Replaying a retired token is treated as theft — every session for that
+user is revoked and all devices must log in again. A token revoked by an
+explicit logout is not treated as theft, so a client retrying after logout
+simply gets a 401.
+
+Auth routes are rate limited to 10 requests per minute per IP. `/health` is not.
+
+Passwords must be at least 12 characters, with no composition rules, and are
+stored as salted scrypt digests.
 
 ## Layout
 
