@@ -15,6 +15,9 @@ function fakeDatabase(reachable: boolean): Database {
   return {
     pool: {} as Database['pool'],
     isReachable: vi.fn(async () => reachable),
+    transaction: vi.fn(async () => {
+      throw new Error('not used by the health route');
+    }),
     close: vi.fn(async () => undefined),
   };
 }

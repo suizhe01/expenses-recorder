@@ -53,6 +53,30 @@ export async function createSession(
   return rows[0] as SessionRow;
 }
 
+/**
+ * Row-locking variant used by rotation. `FOR UPDATE` serialises concurrent
+ * refreshes presenting the same token: the second one blocks until the first
+ * commits, then observes `replaced_by` already set instead of racing past the
+ * usability checks and minting a second live session.
+ *
+ * Must be called on a client inside a transaction — the lock is released at
+ * COMMIT or ROLLBACK.
+ */
+export async function findSessionByTokenForUpdate(
+  client: pg.PoolClient,
+  token: string,
+): Promise<SessionRow | undefined> {
+  const { rows } = await client.query<SessionRow>(
+    `SELECT id, user_id, expires_at, revoked_at, replaced_by
+     FROM sessions
+     WHERE token_hash = $1
+     FOR UPDATE`,
+    [hashRefreshToken(token)],
+  );
+
+  return rows[0];
+}
+
 export async function findSessionByToken(
   executor: Executor,
   token: string,

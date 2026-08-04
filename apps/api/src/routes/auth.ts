@@ -5,6 +5,7 @@ import { hashPassword, verifyPassword } from '../auth/password.js';
 import {
   createSession,
   findSessionByToken,
+  findSessionByTokenForUpdate,
   generateRefreshToken,
   isUsable,
   markReplaced,
@@ -155,49 +156,59 @@ export function registerAuthRoutes(
     }
 
     const presented = parsed.data.refreshToken;
-    const session = await findSessionByToken(database.pool, presented);
 
-    if (!session) {
+    // The whole rotation runs in one transaction against a row-locked session.
+    // Splitting it across statements let two concurrent refreshes with the same
+    // token both pass the checks and both mint a session, after which the
+    // second `replaced_by` write orphaned one live token — reachable by its
+    // holder but invisible to reuse detection.
+    const outcome = await database.transaction(async (client) => {
+      const session = await findSessionByTokenForUpdate(client, presented);
+
+      if (!session) {
+        return { status: 'invalid' as const };
+      }
+
+      // AC-8: replaying a token that was SUPERSEDED BY A REFRESH means it
+      // leaked — the legitimate client already moved on, so someone else is
+      // holding a copy. There is no way to tell which party is which, so end
+      // every session.
+      //
+      // A session revoked by an explicit logout is deliberately excluded: a
+      // client retrying a refresh after logging out is ordinary behaviour, not
+      // theft, and treating it as theft would log every other device out too.
+      if (session.replaced_by !== null) {
+        await revokeAllSessionsForUser(client, session.user_id);
+        return { status: 'reused' as const };
+      }
+
+      if (session.revoked_at !== null || !isUsable(session)) {
+        return { status: 'invalid' as const };
+      }
+
+      const { rows } = await client.query<UserRow>(
+        `SELECT id, email, created_at FROM users WHERE id = $1`,
+        [session.user_id],
+      );
+
+      const user = rows[0];
+
+      if (!user) {
+        return { status: 'invalid' as const };
+      }
+
+      const nextToken = generateRefreshToken();
+      const nextSession = await createSession(client, user.id, nextToken);
+      await markReplaced(client, session.id, nextSession.id);
+
+      return { status: 'rotated' as const, user, nextToken };
+    });
+
+    if (outcome.status !== 'rotated') {
       return reply.code(401).send({ error: 'Invalid refresh token' });
     }
 
-    // AC-8: replaying a token that was SUPERSEDED BY A REFRESH means it
-    // leaked — the legitimate client already moved on, so someone else is
-    // holding a copy. There is no way to tell which party is which, so end
-    // every session.
-    //
-    // A session revoked by an explicit logout is deliberately excluded: a
-    // client retrying a refresh after logging out is ordinary behaviour, not
-    // theft, and treating it as theft would log every other device out too.
-    if (session.replaced_by !== null) {
-      await revokeAllSessionsForUser(database.pool, session.user_id);
-      return reply.code(401).send({ error: 'Invalid refresh token' });
-    }
-
-    if (session.revoked_at !== null) {
-      return reply.code(401).send({ error: 'Invalid refresh token' });
-    }
-
-    if (!isUsable(session)) {
-      return reply.code(401).send({ error: 'Invalid refresh token' });
-    }
-
-    const { rows } = await database.pool.query<UserRow>(
-      `SELECT id, email, created_at FROM users WHERE id = $1`,
-      [session.user_id],
-    );
-
-    const user = rows[0];
-
-    if (!user) {
-      return reply.code(401).send({ error: 'Invalid refresh token' });
-    }
-
-    const nextToken = generateRefreshToken();
-    const nextSession = await createSession(database.pool, user.id, nextToken);
-    await markReplaced(database.pool, session.id, nextSession.id);
-
-    return reply.code(200).send(issueTokens(user, nextToken));
+    return reply.code(200).send(issueTokens(outcome.user, outcome.nextToken));
   });
 
   app.post('/auth/logout', async (request, reply) => {

@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../app.js';
 import { parseConfig } from '../config.js';
 import { createDatabase, type Database } from '../db.js';
+import { hashRefreshToken } from '../auth/sessions.js';
 
 /**
  * These tests run against a real Postgres — the schema, the citext uniqueness,
@@ -195,6 +196,82 @@ describe('POST /auth/refresh', () => {
 
   it('rejects an unknown refresh token', async () => {
     expect((await refresh('never-issued')).statusCode).toBe(401);
+  });
+
+  // Regression, mechanism-level: rotation used to be three separate statements
+  // outside a transaction, so two concurrent refreshes with the same token
+  // could both pass the checks and both mint a session, leaving one live
+  // refresh token that reuse detection could never reach.
+  //
+  // Driving that race through app.inject() is not reliable — the requests do
+  // not interleave predictably. This asserts the mechanism directly: a second
+  // transaction attempting to lock the same session row must block until the
+  // first commits.
+  it('serialises concurrent rotations by locking the session row', async () => {
+    const registered = (await register('a@b.com')).json();
+    const tokenHash = hashRefreshToken(registered.refreshToken);
+
+    const holder = await database.pool.connect();
+    const contender = await database.pool.connect();
+
+    try {
+      await holder.query('BEGIN');
+      const locked = await holder.query(
+        'SELECT id FROM sessions WHERE token_hash = $1 FOR UPDATE',
+        [tokenHash],
+      );
+      expect(locked.rowCount).toBe(1);
+
+      // The contender must not be able to take the same row. If it returns
+      // instead of timing out, rotations are not serialised.
+      await contender.query('BEGIN');
+      await contender.query('SET LOCAL statement_timeout = 500');
+
+      await expect(
+        contender.query('SELECT id FROM sessions WHERE token_hash = $1 FOR UPDATE', [
+          tokenHash,
+        ]),
+      ).rejects.toThrow(/statement timeout/i);
+    } finally {
+      await contender.query('ROLLBACK').catch(() => undefined);
+      await holder.query('ROLLBACK').catch(() => undefined);
+      contender.release();
+      holder.release();
+    }
+  });
+
+  it('mints exactly one session when the same token is refreshed concurrently', async () => {
+    const registered = (await register('a@b.com')).json();
+
+    const results = await Promise.all([
+      refresh(registered.refreshToken),
+      refresh(registered.refreshToken),
+    ]);
+
+    const succeeded = results.filter((r) => r.statusCode === 200);
+    expect(succeeded).toHaveLength(1);
+
+    // One original + exactly one replacement. A third row would mean the race
+    // minted an orphan.
+    const { rows } = await database.pool.query<{ count: string }>(
+      'SELECT count(*) FROM sessions',
+    );
+    expect(rows[0]?.count).toBe('2');
+
+    // Every session created by the rotation is reachable from its predecessor.
+    const orphans = await database.pool.query(
+      `SELECT id FROM sessions s
+       WHERE s.id <> $1
+         AND NOT EXISTS (SELECT 1 FROM sessions p WHERE p.replaced_by = s.id)`,
+      [
+        (
+          await database.pool.query<{ id: string }>(
+            'SELECT id FROM sessions ORDER BY created_at ASC LIMIT 1',
+          )
+        ).rows[0]?.id,
+      ],
+    );
+    expect(orphans.rowCount).toBe(0);
   });
 
   // AC-8
