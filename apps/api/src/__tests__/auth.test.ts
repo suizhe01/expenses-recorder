@@ -15,6 +15,7 @@ import * as password from '../auth/password.js';
 const config = parseConfig({
   ...process.env,
   JWT_SECRET: 'test-secret-at-least-thirty-two-chars',
+  PUBLIC_BASE_URL: 'http://localhost:3000',
   LOG_LEVEL: 'silent',
 });
 

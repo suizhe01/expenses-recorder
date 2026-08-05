@@ -6,6 +6,8 @@ import type { Config } from './config.js';
 import type { Database } from './db.js';
 import { registerHealthRoute } from './routes/health.js';
 import { registerAuthRoutes } from './routes/auth.js';
+import { registerVerifyRoute } from './routes/verify.js';
+import { createConsoleTransport, type EmailTransport } from './email/transport.js';
 
 const require = createRequire(import.meta.url);
 const pkg = require('../package.json') as { version: string };
@@ -15,14 +17,25 @@ export const version: string = pkg.version;
 export type BuildAppOptions = {
   config: Config;
   database: Database;
+  /**
+   * Defaults to the console transport (EXP-8 NG-1). Injectable so tests can
+   * observe what would have been sent without reading log output.
+   */
+  emailTransport?: EmailTransport;
 };
 
-export function buildApp({ config, database }: BuildAppOptions): FastifyInstance {
+export function buildApp({
+  config,
+  database,
+  emailTransport,
+}: BuildAppOptions): FastifyInstance {
   const app = Fastify({
     logger: { level: config.LOG_LEVEL },
   });
 
   app.register(fastifyJwt, { secret: config.JWT_SECRET });
+
+  const transport = emailTransport ?? createConsoleTransport(app.log);
 
   registerHealthRoute(app, { database, version });
 
@@ -35,7 +48,8 @@ export function buildApp({ config, database }: BuildAppOptions): FastifyInstance
       timeWindow: '1 minute',
     });
 
-    registerAuthRoutes(scope, { database });
+    registerAuthRoutes(scope, { config, database, emailTransport: transport });
+    registerVerifyRoute(scope, { database });
   });
 
   return app;

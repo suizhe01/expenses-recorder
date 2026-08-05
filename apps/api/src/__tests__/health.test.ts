@@ -7,6 +7,7 @@ import type { Database } from '../db.js';
 const config = parseConfig({
   DATABASE_URL: 'postgres://user:pass@localhost:5432/expenses',
   JWT_SECRET: 'a'.repeat(32),
+  PUBLIC_BASE_URL: 'http://localhost:3000',
   LOG_LEVEL: 'silent',
 });
 

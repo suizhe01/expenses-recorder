@@ -4,6 +4,7 @@ import { ConfigError, parseConfig } from '../config.js';
 const validEnv = {
   DATABASE_URL: 'postgres://user:pass@localhost:5432/expenses',
   JWT_SECRET: 'a'.repeat(32),
+  PUBLIC_BASE_URL: 'http://localhost:3000',
 };
 
 describe('parseConfig', () => {
@@ -60,6 +61,38 @@ describe('parseConfig', () => {
     } catch (error) {
       expect((error as ConfigError).issues.join('\n')).toContain('JWT_SECRET');
     }
+  });
+
+  // AC-2
+  it('rejects a missing PUBLIC_BASE_URL and names it', () => {
+    try {
+      parseConfig({
+        DATABASE_URL: validEnv.DATABASE_URL,
+        JWT_SECRET: validEnv.JWT_SECRET,
+      });
+      expect.unreachable('parseConfig should have thrown');
+    } catch (error) {
+      expect((error as ConfigError).issues.join('\n')).toContain('PUBLIC_BASE_URL');
+    }
+  });
+
+  it('rejects a PUBLIC_BASE_URL that is not an absolute http(s) URL', () => {
+    for (const bad of ['notaurl', '/auth/verify', 'ftp://x.com', 'example.com']) {
+      try {
+        parseConfig({ ...validEnv, PUBLIC_BASE_URL: bad });
+        expect.unreachable(`parseConfig should have rejected ${bad}`);
+      } catch (error) {
+        expect((error as ConfigError).issues.join('\n')).toContain('PUBLIC_BASE_URL');
+      }
+    }
+  });
+
+  it('accepts an https PUBLIC_BASE_URL', () => {
+    const config = parseConfig({
+      ...validEnv,
+      PUBLIC_BASE_URL: 'https://expenses.example.com',
+    });
+    expect(config.PUBLIC_BASE_URL).toBe('https://expenses.example.com');
   });
 
   it('rejects a JWT_SECRET shorter than 32 characters and names it', () => {

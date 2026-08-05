@@ -94,6 +94,7 @@ starts half-configured.
 | `LOG_LEVEL` | no | `info` | One of `fatal`, `error`, `warn`, `info`, `debug`, `trace`, `silent` |
 | `DATABASE_URL` | **yes** | — | Postgres connection string. Must start `postgres://` or `postgresql://` |
 | `JWT_SECRET` | **yes** | — | HS256 signing key for access tokens. Minimum 32 characters. Changing it invalidates every issued access token |
+| `PUBLIC_BASE_URL` | **yes** | — | Absolute `http://` or `https://` origin the API is reached on. Used to build verification links |
 | `POSTGRES_USER` | no | `expenses` | Database user created by the Postgres container |
 | `POSTGRES_PASSWORD` | no | `expenses` | Password for that user. Local development only |
 | `POSTGRES_DB` | no | `expenses` | Database created by the Postgres container |
@@ -116,6 +117,8 @@ node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"
 | POST | `/auth/login` | Exchange credentials for both tokens |
 | POST | `/auth/refresh` | Rotate: returns a new access AND refresh token |
 | POST | `/auth/logout` | Revoke the presented session only |
+| POST | `/auth/resend-verification` | Request a fresh verification email |
+| GET | `/auth/verify` | Open a verification link (returns an HTML page) |
 | GET | `/auth/me` | The caller's account, via `Authorization: Bearer <accessToken>` |
 
 Access tokens are HS256 JWTs valid for 15 minutes. Refresh tokens are opaque
@@ -133,6 +136,40 @@ flight, the endpoint waits up to 3 seconds for the row lock and then returns
 should retry rather than send the user back to a login screen.
 
 Auth routes are rate limited to 10 requests per minute per IP. `/health` is not.
+
+### Email verification
+
+**Nothing is gated on verification yet** — this is the mechanism only. Login and
+registration are unchanged, and `email_verified` still defaults to true.
+
+```bash
+curl -X POST localhost:3000/auth/resend-verification \
+  -H 'content-type: application/json' -d '{"email":"you@example.com"}'
+```
+
+The response is always `202` with the same body, whether the address is
+unregistered, unverified, or already verified — otherwise this endpoint would be
+an easy way to discover which addresses have accounts. An email is only actually
+dispatched for a registered, unverified address, and at most one per address per
+minute.
+
+**No real email is sent yet.** The only transport writes the link to the API log:
+
+```bash
+docker compose logs api | grep verificationUrl
+```
+
+Open that URL in a browser to verify. Links last 24 hours, and requesting a new
+one immediately invalidates any earlier link — only the newest works. Opening a
+spent link shows a friendly "already verified" page rather than an error, since
+mail clients routinely prefetch links.
+
+Verification never signs you in. A page opened from an email client is a poor
+place to hand out credentials, so it confirms and tells you to sign in normally.
+
+`PUBLIC_BASE_URL` is what those links point at. It cannot be inferred from the
+request — the link is opened later, elsewhere — so set it to your public origin
+in production.
 
 ### Pruning old sessions
 
