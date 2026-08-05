@@ -7,6 +7,11 @@ export type Database = {
   pool: pg.Pool;
   /** True when a trivial round-trip to Postgres succeeds. Never throws. */
   isReachable: () => Promise<boolean>;
+  /**
+   * Runs `fn` inside a transaction on a dedicated client, committing on
+   * success and rolling back on any throw. The client is always released.
+   */
+  transaction: <T>(fn: (client: pg.PoolClient) => Promise<T>) => Promise<T>;
   close: () => Promise<void>;
 };
 
@@ -34,6 +39,26 @@ export function createDatabase(config: Config): Database {
         return true;
       } catch {
         return false;
+      }
+    },
+    async transaction(fn) {
+      const client = await pool.connect();
+
+      try {
+        await client.query('BEGIN');
+        const result = await fn(client);
+        await client.query('COMMIT');
+        return result;
+      } catch (error) {
+        // A failed ROLLBACK must not mask the original error.
+        try {
+          await client.query('ROLLBACK');
+        } catch {
+          /* ignore */
+        }
+        throw error;
+      } finally {
+        client.release();
       }
     },
     async close() {
