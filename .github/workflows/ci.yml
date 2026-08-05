@@ -32,6 +32,7 @@ jobs:
     env:
       DATABASE_URL: postgres://expenses:expenses@localhost:5432/expenses
       JWT_SECRET: ci-only-secret-not-used-outside-github-actions
+      PUBLIC_BASE_URL: http://localhost:3000
 
     steps:
       - uses: actions/checkout@v4
@@ -73,6 +74,11 @@ jobs:
             FROM information_schema.columns
             WHERE table_name = 'sessions'
           " | grep -qx 'created_at,expires_at,id,replaced_by,revoked_at,token_hash,user_id'
+          psql "$DATABASE_URL" -tAc "
+            SELECT string_agg(column_name, ',' ORDER BY column_name)
+            FROM information_schema.columns
+            WHERE table_name = 'email_verification_tokens'
+          " | grep -qx 'consumed_at,created_at,expires_at,id,token_hash,user_id'
 
       - name: Test
         run: npm run test --workspace apps/api

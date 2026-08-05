@@ -1,6 +1,13 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+import type { Config } from '../config.js';
 import type { Database } from '../db.js';
+import type { EmailTransport } from '../email/transport.js';
+import {
+  createVerificationToken,
+  generateVerificationToken,
+  isThrottled,
+} from '../auth/verification.js';
 import {
   DUMMY_PASSWORD_DIGEST,
   hashPassword,
@@ -45,6 +52,18 @@ const refreshSchema = z.object({
   refreshToken: z.string().min(1, { message: 'is required' }),
 });
 
+const resendSchema = z.object({
+  email: z.string().email(),
+});
+
+/**
+ * AC-3: one response for every case, so the endpoint reveals nothing about
+ * whether an address is registered or already verified.
+ */
+const VERIFICATION_DISPATCHED = {
+  message: 'If that address needs verification, an email is on its way.',
+} as const;
+
 type UserRow = {
   id: string;
   email: string;
@@ -64,12 +83,14 @@ function fieldErrors(error: z.ZodError): Record<string, string> {
 }
 
 export type AuthRouteOptions = {
+  config: Config;
   database: Database;
+  emailTransport: EmailTransport;
 };
 
 export function registerAuthRoutes(
   app: FastifyInstance,
-  { database }: AuthRouteOptions,
+  { config, database, emailTransport }: AuthRouteOptions,
 ): void {
   function issueTokens(user: UserRow, refreshToken: string) {
     return {
@@ -266,6 +287,67 @@ export function registerAuthRoutes(
     }
 
     return reply.code(204).send();
+  });
+
+  /**
+   * AC-3: the response is identical for an unregistered address, an
+   * unverified one, and an already-verified one. Anything else turns this
+   * endpoint into the account-enumeration oracle that EXP-7 removed from
+   * login — an attacker would simply ask here instead.
+   */
+  app.post('/auth/resend-verification', async (request, reply) => {
+    const parsed = resendSchema.safeParse(request.body);
+
+    // Even a malformed body gets the same 202: reporting a validation error
+    // for some inputs and not others is itself a signal.
+    if (!parsed.success) {
+      return reply.code(202).send(VERIFICATION_DISPATCHED);
+    }
+
+    const { email } = parsed.data;
+
+    const { rows } = await database.pool.query<{
+      id: string;
+      email_verified: boolean;
+    }>(`SELECT id, email_verified FROM users WHERE email = $1`, [email]);
+
+    const user = rows[0];
+
+    if (!user || user.email_verified) {
+      return reply.code(202).send(VERIFICATION_DISPATCHED);
+    }
+
+    // AC-4: the per-IP rate limit does not protect an inbox — someone
+    // rotating IPs could use a known address to send a stream of mail. This
+    // caps it per account.
+    if (await isThrottled(database.pool, user.id)) {
+      return reply.code(202).send(VERIFICATION_DISPATCHED);
+    }
+
+    const token = generateVerificationToken();
+
+    // AC-5: superseding earlier tokens and inserting the new one share a
+    // transaction, so a failure cannot leave an account with no live link.
+    await database.transaction((client) =>
+      createVerificationToken(client, user.id, token),
+    );
+
+    const verificationUrl = new URL('/auth/verify', config.PUBLIC_BASE_URL);
+    verificationUrl.searchParams.set('token', token);
+
+    try {
+      await emailTransport.sendVerificationEmail({
+        to: email,
+        verificationUrl: verificationUrl.toString(),
+      });
+    } catch (error) {
+      // The token is already issued and the user can ask again, so a transport
+      // failure is logged rather than surfaced — and surfacing it would break
+      // the identical-response guarantee anyway.
+      request.log.error({ err: error }, 'failed to dispatch verification email');
+    }
+
+    return reply.code(202).send(VERIFICATION_DISPATCHED);
   });
 
   app.get('/auth/me', async (request, reply) => {

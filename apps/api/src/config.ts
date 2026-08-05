@@ -25,6 +25,24 @@ const configSchema = z.object({
   JWT_SECRET: z
     .string()
     .min(32, { message: 'must be at least 32 characters' }),
+  // Origin the API is reached on, used to build verification links. It cannot
+  // be derived from the request: a link is built for an email that will be
+  // opened elsewhere, and trusting the Host header would let a caller mint
+  // links pointing at a domain they control.
+  PUBLIC_BASE_URL: z
+    .string()
+    .min(1)
+    .refine(
+      (value) => {
+        try {
+          const url = new URL(value);
+          return url.protocol === 'http:' || url.protocol === 'https:';
+        } catch {
+          return false;
+        }
+      },
+      { message: 'must be an absolute http:// or https:// URL' },
+    ),
 });
 
 export type Config = z.infer<typeof configSchema>;
