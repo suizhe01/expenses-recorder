@@ -43,6 +43,23 @@ const configSchema = z.object({
       },
       { message: 'must be an absolute http:// or https:// URL' },
     ),
+  // Optional. When absent the console transport is used, so local development
+  // and CI work with no account, no key, and no network.
+  //
+  // An empty string is treated as absent: docker compose expands an unset
+  // `${RESEND_API_KEY:-}` to "", and rejecting that would stop the API booting
+  // for anyone who has not signed up for Resend.
+  RESEND_API_KEY: z.preprocess(
+    (value) => (value === '' ? undefined : value),
+    z.string().min(1).optional(),
+  ),
+  // Resend's shared test sender. It needs no domain or DNS, but only delivers
+  // to the address on the Resend account — swap for your own domain to reach
+  // anyone else.
+  MAIL_FROM: z
+    .string()
+    .email({ message: 'must be a valid email address' })
+    .default('onboarding@resend.dev'),
 });
 
 export type Config = z.infer<typeof configSchema>;

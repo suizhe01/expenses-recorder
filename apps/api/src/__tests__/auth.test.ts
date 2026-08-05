@@ -62,6 +62,19 @@ function login(email: string, password: string = PASSWORD) {
   });
 }
 
+/**
+ * Registration no longer returns tokens and new accounts start unverified
+ * (EXP-9 AC-5), so tests that need a session register, mark the account
+ * verified, and log in — the same path a real user walks.
+ */
+async function verifiedAccount(email = 'a@b.com', password: string = PASSWORD) {
+  await register(email, password);
+  await database.pool.query('UPDATE users SET email_verified = true WHERE email = $1', [
+    email,
+  ]);
+  return (await login(email, password)).json();
+}
+
 function refresh(refreshToken: string) {
   return app.inject({
     method: 'POST',
@@ -71,35 +84,47 @@ function refresh(refreshToken: string) {
 }
 
 describe('POST /auth/register', () => {
-  // AC-2
-  it('creates a user and a session, returning both tokens', async () => {
+  // AC-5 (supersedes EXP-6 AC-2): no tokens, no session, unverified.
+  it('creates an unverified user with no session and returns a fixed body', async () => {
     const response = await register('a@b.com');
     expect(response.statusCode).toBe(201);
 
-    const body = response.json();
-    expect(body.user.email).toBe('a@b.com');
-    expect(body.user.id).toMatch(/^[0-9a-f-]{36}$/);
-    expect(body.user).not.toHaveProperty('password_hash');
-    expect(body.accessToken).toBeTypeOf('string');
-    expect(body.refreshToken).toBeTypeOf('string');
-    expect(body.expiresIn).toBe(900);
+    expect(response.json()).toEqual({
+      message: 'Check your email to verify your address.',
+    });
+    expect(response.body).not.toContain('accessToken');
+    expect(response.body).not.toContain('refreshToken');
 
-    const users = await database.pool.query('SELECT id FROM users');
+    const users = await database.pool.query<{ email_verified: boolean }>(
+      'SELECT email_verified FROM users',
+    );
     const sessions = await database.pool.query('SELECT id FROM sessions');
     expect(users.rowCount).toBe(1);
-    expect(sessions.rowCount).toBe(1);
+    expect(users.rows[0]?.email_verified).toBe(false);
+    expect(sessions.rowCount).toBe(0);
   });
 
-  // AC-3
-  it('rejects a duplicate email case-insensitively without creating rows', async () => {
-    await register('foo@x.com');
-    const response = await register('Foo@x.com');
+  // AC-6 (supersedes EXP-6 AC-3): identical response, nothing modified.
+  it('answers identically for an existing address and never touches the account', async () => {
+    const first = await register('foo@x.com');
+    const before = await database.pool.query<{ password_hash: string }>(
+      'SELECT password_hash FROM users',
+    );
 
-    expect(response.statusCode).toBe(409);
-    expect(response.json().error).toMatch(/already registered/i);
+    // Same address, different case, DIFFERENT password.
+    const second = await register('Foo@x.com', 'a-totally-different-password');
 
-    const users = await database.pool.query('SELECT id FROM users');
-    expect(users.rowCount).toBe(1);
+    expect(second.statusCode).toBe(first.statusCode);
+    expect(second.body).toBe(first.body);
+
+    const after = await database.pool.query<{ password_hash: string }>(
+      'SELECT password_hash FROM users',
+    );
+
+    expect(after.rowCount).toBe(1);
+    // The load-bearing assertion: re-registering must never overwrite the
+    // password, or anyone could seize an account by re-registering its address.
+    expect(after.rows[0]?.password_hash).toBe(before.rows[0]?.password_hash);
   });
 
   // AC-4
@@ -148,7 +173,7 @@ describe('POST /auth/register', () => {
 describe('POST /auth/login', () => {
   // AC-5
   it('returns tokens for correct credentials', async () => {
-    await register('a@b.com');
+    await verifiedAccount('a@b.com');
     const response = await login('a@b.com');
 
     expect(response.statusCode).toBe(200);
@@ -157,7 +182,7 @@ describe('POST /auth/login', () => {
 
   // AC-5: both failure modes must be indistinguishable.
   it('returns an identical 401 for a wrong password and an unknown email', async () => {
-    await register('a@b.com');
+    await verifiedAccount('a@b.com');
 
     const wrongPassword = await login('a@b.com', 'wrongpasswordhere');
     const unknownEmail = await login('nobody@x.com');
@@ -169,8 +194,63 @@ describe('POST /auth/login', () => {
   });
 
   it('is case-insensitive on the email', async () => {
-    await register('foo@x.com');
+    await verifiedAccount('foo@x.com');
     expect((await login('FOO@x.com')).statusCode).toBe(200);
+  });
+
+  // AC-8: the gate itself.
+  it('returns 403 with a machine-readable code for an unverified account', async () => {
+    await register('pending@x.com');
+
+    const response = await login('pending@x.com');
+
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toEqual({
+      error: 'Email not verified',
+      code: 'email_not_verified',
+    });
+    expect(response.body).not.toContain('accessToken');
+
+    const sessions = await database.pool.query('SELECT id FROM sessions');
+    expect(sessions.rowCount).toBe(0);
+  });
+
+  // AC-8: and it sends a fresh link, since reaching here proves the password.
+  it('dispatches a verification email alongside the 403', async () => {
+    await register('pending@x.com');
+    // Registration already sent one; clear it so the throttle allows another.
+    await database.pool.query('DELETE FROM email_verification_tokens');
+
+    await login('pending@x.com');
+
+    const tokens = await database.pool.query('SELECT id FROM email_verification_tokens');
+    expect(tokens.rowCount).toBe(1);
+  });
+
+  // AC-9: the 403 must sit BEHIND the password check, or it becomes the
+  // enumeration oracle EXP-7 removed.
+  it('returns the generic 401, not the 403, when the password is wrong', async () => {
+    await register('pending@x.com');
+
+    const wrongPassword = await login('pending@x.com', 'definitelywrongpass');
+    const unknownEmail = await login('nobody@x.com', 'definitelywrongpass');
+
+    expect(wrongPassword.statusCode).toBe(401);
+    expect(wrongPassword.body).toBe(unknownEmail.body);
+    expect(wrongPassword.body).not.toContain('email_not_verified');
+  });
+
+  // AC-10
+  it('is unchanged for a verified account', async () => {
+    const body = await verifiedAccount('done@x.com');
+
+    expect(body.user.email).toBe('done@x.com');
+    expect(body.accessToken).toBeTypeOf('string');
+    expect(body.refreshToken).toBeTypeOf('string');
+    expect(body.expiresIn).toBe(900);
+
+    const sessions = await database.pool.query('SELECT id FROM sessions');
+    expect(sessions.rowCount).toBe(1);
   });
 
   // AC-1: the bodies were already identical, but an unknown address used to
@@ -178,7 +258,7 @@ describe('POST /auth/login', () => {
   // alone reveals which addresses are registered. Asserting the scrypt call
   // count is deterministic; asserting wall-clock timing is not.
   it('performs exactly one scrypt verification on every failing path', async () => {
-    await register('exists@x.com');
+    await verifiedAccount('exists@x.com');
     await database.pool.query(
       `INSERT INTO users (email, password_hash) VALUES ($1, NULL)`,
       ['nohash@x.com'],
@@ -208,7 +288,7 @@ describe('POST /auth/login', () => {
 describe('POST /auth/refresh', () => {
   // AC-7
   it('rotates both tokens and invalidates the old refresh token', async () => {
-    const registered = (await register('a@b.com')).json();
+    const registered = await verifiedAccount('a@b.com');
 
     const rotated = await refresh(registered.refreshToken);
     expect(rotated.statusCode).toBe(200);
@@ -241,7 +321,7 @@ describe('POST /auth/refresh', () => {
   // transaction attempting to lock the same session row must block until the
   // first commits.
   it('serialises concurrent rotations by locking the session row', async () => {
-    const registered = (await register('a@b.com')).json();
+    const registered = await verifiedAccount('a@b.com');
     const tokenHash = hashRefreshToken(registered.refreshToken);
 
     const holder = await database.pool.connect();
@@ -276,7 +356,7 @@ describe('POST /auth/refresh', () => {
   // AC-2: a lock wait means another rotation of this same session is in
   // flight, not that the token is bad. Before this the request waited forever.
   it('returns 503 with Retry-After when the session row is already locked', async () => {
-    const registered = (await register('a@b.com')).json();
+    const registered = await verifiedAccount('a@b.com');
     const tokenHash = hashRefreshToken(registered.refreshToken);
 
     const holder = await database.pool.connect();
@@ -316,7 +396,7 @@ describe('POST /auth/refresh', () => {
   }, 20_000);
 
   it('leaves every rotated session reachable from its predecessor', async () => {
-    const registered = (await register('a@b.com')).json();
+    const registered = await verifiedAccount('a@b.com');
 
     const results = await Promise.all([
       refresh(registered.refreshToken),
@@ -351,7 +431,7 @@ describe('POST /auth/refresh', () => {
 
   // AC-8
   it('revokes every session for the user when a rotated token is reused', async () => {
-    const first = (await register('a@b.com')).json();
+    const first = await verifiedAccount('a@b.com');
     const secondDevice = (await login('a@b.com')).json();
 
     const rotated = (await refresh(first.refreshToken)).json();
@@ -374,7 +454,7 @@ describe('POST /auth/refresh', () => {
 describe('POST /auth/logout', () => {
   // AC-9
   it('revokes only the presented session', async () => {
-    const phone = (await register('a@b.com')).json();
+    const phone = await verifiedAccount('a@b.com');
     const tablet = (await login('a@b.com')).json();
 
     const response = await app.inject({
@@ -391,7 +471,7 @@ describe('POST /auth/logout', () => {
   // AC-8 vs AC-9: a client retrying a refresh after logout is ordinary, not
   // theft. Replaying a logged-out token must NOT cascade to other devices.
   it('does not treat a replayed logged-out token as theft', async () => {
-    const phone = (await register('a@b.com')).json();
+    const phone = await verifiedAccount('a@b.com');
     const tablet = (await login('a@b.com')).json();
 
     await app.inject({
@@ -430,7 +510,7 @@ describe('GET /auth/me', () => {
 
   // AC-10
   it('returns the caller for a valid access token', async () => {
-    const registered = (await register('a@b.com')).json();
+    const registered = await verifiedAccount('a@b.com');
     const response = await me(`Bearer ${registered.accessToken}`);
 
     expect(response.statusCode).toBe(200);

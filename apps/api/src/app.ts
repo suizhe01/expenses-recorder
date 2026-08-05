@@ -8,6 +8,7 @@ import { registerHealthRoute } from './routes/health.js';
 import { registerAuthRoutes } from './routes/auth.js';
 import { registerVerifyRoute } from './routes/verify.js';
 import { createConsoleTransport, type EmailTransport } from './email/transport.js';
+import { createResendTransport } from './email/resend.js';
 
 const require = createRequire(import.meta.url);
 const pkg = require('../package.json') as { version: string };
@@ -35,7 +36,21 @@ export function buildApp({
 
   app.register(fastifyJwt, { secret: config.JWT_SECRET });
 
-  const transport = emailTransport ?? createConsoleTransport(app.log);
+  // AC-1: Resend when a key is present, the console transport otherwise, so
+  // local development and CI need no account, no key, and no network.
+  const transport =
+    emailTransport ??
+    (config.RESEND_API_KEY
+      ? createResendTransport({
+          apiKey: config.RESEND_API_KEY,
+          from: config.MAIL_FROM,
+        })
+      : createConsoleTransport(app.log));
+
+  app.log.info(
+    { transport: transport.name, from: config.MAIL_FROM },
+    'email transport selected',
+  );
 
   registerHealthRoute(app, { database, version });
 

@@ -95,6 +95,8 @@ starts half-configured.
 | `DATABASE_URL` | **yes** | — | Postgres connection string. Must start `postgres://` or `postgresql://` |
 | `JWT_SECRET` | **yes** | — | HS256 signing key for access tokens. Minimum 32 characters. Changing it invalidates every issued access token |
 | `PUBLIC_BASE_URL` | **yes** | — | Absolute `http://` or `https://` origin the API is reached on. Used to build verification links |
+| `RESEND_API_KEY` | no | — | Resend API key. Unset (or empty) selects the console transport, which logs the link instead of sending |
+| `MAIL_FROM` | no | `onboarding@resend.dev` | Sender address. Must be a valid email |
 | `POSTGRES_USER` | no | `expenses` | Database user created by the Postgres container |
 | `POSTGRES_PASSWORD` | no | `expenses` | Password for that user. Local development only |
 | `POSTGRES_DB` | no | `expenses` | Database created by the Postgres container |
@@ -139,8 +141,25 @@ Auth routes are rate limited to 10 requests per minute per IP. `/health` is not.
 
 ### Email verification
 
-**Nothing is gated on verification yet** — this is the mechanism only. Login and
-registration are unchanged, and `email_verified` still defaults to true.
+**Verification is enforced.** New accounts start unverified and cannot sign in
+until the address is confirmed.
+
+```
+register  →  201, no tokens, email sent
+login     →  403 email_not_verified  (+ a fresh link is sent)
+open link →  verified
+login     →  200 with tokens
+```
+
+`POST /auth/register` returns `{"message":"Check your email to verify your
+address."}` and nothing else — no tokens, no user object. It answers identically
+whether the address was free or already taken, so registration cannot be used to
+discover which addresses have accounts. Re-registering an existing address never
+changes the stored password.
+
+The `403` is only reachable **after** the password has been verified, so it
+tells a caller nothing they did not already know. A wrong password still returns
+the same generic `401` as an unknown address.
 
 ```bash
 curl -X POST localhost:3000/auth/resend-verification \
@@ -153,11 +172,27 @@ an easy way to discover which addresses have accounts. An email is only actually
 dispatched for a registered, unverified address, and at most one per address per
 minute.
 
-**No real email is sent yet.** The only transport writes the link to the API log:
+**Without `RESEND_API_KEY`, no real email is sent.** The console transport
+writes the link to the API log instead, which is how local development and CI
+work — no account, no key, no network:
 
 ```bash
 docker compose logs api | grep verificationUrl
 ```
+
+To send real email, get a free key at <https://resend.com> and set it:
+
+```bash
+RESEND_API_KEY=re_xxxxxxxxxxxx
+MAIL_FROM=onboarding@resend.dev
+```
+
+`onboarding@resend.dev` is Resend's shared test sender. It needs no domain and
+no DNS records, but it **only delivers to the email address on your own Resend
+account**. Point `MAIL_FROM` at a domain you have verified with Resend to reach
+anyone else.
+
+The API logs which transport it selected at startup.
 
 Open that URL in a browser to verify. Links last 24 hours, and requesting a new
 one immediately invalidates any earlier link — only the newest works. Opening a
