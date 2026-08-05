@@ -1,9 +1,10 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../app.js';
 import { parseConfig } from '../config.js';
 import { createDatabase, type Database } from '../db.js';
 import { hashRefreshToken } from '../auth/sessions.js';
+import * as password from '../auth/password.js';
 
 /**
  * These tests run against a real Postgres — the schema, the citext uniqueness,
@@ -170,6 +171,37 @@ describe('POST /auth/login', () => {
     await register('foo@x.com');
     expect((await login('FOO@x.com')).statusCode).toBe(200);
   });
+
+  // AC-1: the bodies were already identical, but an unknown address used to
+  // return ~50ms sooner because it skipped hashing entirely. That difference
+  // alone reveals which addresses are registered. Asserting the scrypt call
+  // count is deterministic; asserting wall-clock timing is not.
+  it('performs exactly one scrypt verification on every failing path', async () => {
+    await register('exists@x.com');
+    await database.pool.query(
+      `INSERT INTO users (email, password_hash) VALUES ($1, NULL)`,
+      ['nohash@x.com'],
+    );
+
+    const spy = vi.spyOn(password, 'verifyPassword');
+
+    const cases = ['exists@x.com', 'nobody@x.com', 'nohash@x.com'];
+    const bodies: string[] = [];
+
+    for (const email of cases) {
+      spy.mockClear();
+      const response = await login(email, 'definitelywrongpassword');
+
+      expect(response.statusCode).toBe(401);
+      expect(spy, `expected one hash for ${email}`).toHaveBeenCalledTimes(1);
+      bodies.push(response.body);
+    }
+
+    // AC-5 of EXP-6 still holds: the responses remain byte-identical.
+    expect(new Set(bodies).size).toBe(1);
+
+    spy.mockRestore();
+  });
 });
 
 describe('POST /auth/refresh', () => {
@@ -240,7 +272,49 @@ describe('POST /auth/refresh', () => {
     }
   });
 
-  it('mints exactly one session when the same token is refreshed concurrently', async () => {
+  // AC-2: a lock wait means another rotation of this same session is in
+  // flight, not that the token is bad. Before this the request waited forever.
+  it('returns 503 with Retry-After when the session row is already locked', async () => {
+    const registered = (await register('a@b.com')).json();
+    const tokenHash = hashRefreshToken(registered.refreshToken);
+
+    const holder = await database.pool.connect();
+
+    try {
+      await holder.query('BEGIN');
+      await holder.query('SELECT id FROM sessions WHERE token_hash = $1 FOR UPDATE', [
+        tokenHash,
+      ]);
+
+      const before = await database.pool.query('SELECT count(*) FROM sessions');
+
+      const startedAt = Date.now();
+      const response = await refresh(registered.refreshToken);
+      const elapsed = Date.now() - startedAt;
+
+      expect(response.statusCode).toBe(503);
+      expect(response.headers['retry-after']).toBe('1');
+      // Distinct from the invalid-token 401 so a client can tell them apart.
+      expect(response.json().error).not.toBe('Invalid refresh token');
+
+      // Bounded by lock_timeout rather than hanging, with headroom for CI.
+      expect(elapsed).toBeLessThan(10_000);
+
+      // Nothing was created, revoked, or replaced.
+      const after = await database.pool.query('SELECT count(*) FROM sessions');
+      expect(after.rows[0]).toEqual(before.rows[0]);
+
+      const { rows } = await database.pool.query<{ count: string }>(
+        'SELECT count(*) FROM sessions WHERE revoked_at IS NOT NULL',
+      );
+      expect(rows[0]?.count).toBe('0');
+    } finally {
+      await holder.query('ROLLBACK').catch(() => undefined);
+      holder.release();
+    }
+  }, 20_000);
+
+  it('leaves every rotated session reachable from its predecessor', async () => {
     const registered = (await register('a@b.com')).json();
 
     const results = await Promise.all([

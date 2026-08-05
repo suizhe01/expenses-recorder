@@ -1,7 +1,11 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { Database } from '../db.js';
-import { hashPassword, verifyPassword } from '../auth/password.js';
+import {
+  DUMMY_PASSWORD_DIGEST,
+  hashPassword,
+  verifyPassword,
+} from '../auth/password.js';
 import {
   createSession,
   findSessionByToken,
@@ -19,6 +23,15 @@ export const ACCESS_TOKEN_TTL_SECONDS = 15 * 60;
 
 /** Postgres unique-violation. */
 const UNIQUE_VIOLATION = '23505';
+
+/** Postgres lock_not_available — raised when lock_timeout expires. */
+const LOCK_NOT_AVAILABLE = '55P03';
+
+/**
+ * How long a rotation waits for the session row lock. Far above a normal
+ * rotation (single-digit milliseconds) and far below a stuck one.
+ */
+const LOCK_TIMEOUT_MS = 3_000;
 
 const credentialsSchema = z.object({
   email: z.string().email({ message: 'must be a valid email address' }),
@@ -133,12 +146,16 @@ export function registerAuthRoutes(
 
     const user = rows[0];
 
-    // NG-1: email_verified is deliberately not consulted here.
-    if (!user || user.password_hash === null) {
-      return reply.code(401).send(INVALID_CREDENTIALS);
-    }
+    // AC-1: every path spends the same time hashing. Returning early for an
+    // unknown address would answer ~50ms faster than a wrong password, and
+    // that difference alone reveals which addresses are registered — the
+    // enumeration the identical response bodies exist to prevent.
+    //
+    // email_verified is deliberately not consulted here (EXP-6 NG-1).
+    const digest = user?.password_hash ?? (await DUMMY_PASSWORD_DIGEST);
+    const passwordMatches = await verifyPassword(password, digest);
 
-    if (!(await verifyPassword(password, user.password_hash))) {
+    if (!user || user.password_hash === null || !passwordMatches) {
       return reply.code(401).send(INVALID_CREDENTIALS);
     }
 
@@ -163,6 +180,12 @@ export function registerAuthRoutes(
     // second `replaced_by` write orphaned one live token — reachable by its
     // holder but invisible to reuse detection.
     const outcome = await database.transaction(async (client) => {
+      // AC-2: bound the wait for the row lock. Without this a rotation whose
+      // holder stalls blocks every other refresh of the same session
+      // indefinitely. SET LOCAL scopes it to this transaction, so the pooled
+      // connection is unaffected once it ends.
+      await client.query(`SET LOCAL lock_timeout = '${LOCK_TIMEOUT_MS}ms'`);
+
       const session = await findSessionByTokenForUpdate(client, presented);
 
       if (!session) {
@@ -202,7 +225,23 @@ export function registerAuthRoutes(
       await markReplaced(client, session.id, nextSession.id);
 
       return { status: 'rotated' as const, user, nextToken };
+    }).catch((error: unknown) => {
+      // AC-2: a lock timeout means another rotation of this same session is
+      // genuinely in flight — the token is fine. Answering 401 would push a
+      // legitimate client to a login screen, so signal "retry" instead. The
+      // transaction rolled back, so nothing was created, revoked, or replaced.
+      if ((error as { code?: string }).code === LOCK_NOT_AVAILABLE) {
+        return { status: 'locked' as const };
+      }
+      throw error;
     });
+
+    if (outcome.status === 'locked') {
+      return reply
+        .code(503)
+        .header('Retry-After', '1')
+        .send({ error: 'Refresh already in progress, please retry' });
+    }
 
     if (outcome.status !== 'rotated') {
       return reply.code(401).send({ error: 'Invalid refresh token' });
