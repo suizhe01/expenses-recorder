@@ -30,6 +30,19 @@ const configSchema = z.object({
 export type Config = z.infer<typeof configSchema>;
 
 /**
+ * The subset of the schema a database-only entry point needs. Derived from
+ * `configSchema` rather than restated, so `DATABASE_URL` is validated by
+ * exactly the same rule and produces exactly the same error message.
+ *
+ * Maintenance scripts use this so they do not demand unrelated secrets:
+ * pruning sessions has no business requiring `JWT_SECRET`, and an operator
+ * running it from cron should not have to supply one.
+ */
+const databaseConfigSchema = configSchema.pick({ DATABASE_URL: true });
+
+export type DatabaseConfig = z.infer<typeof databaseConfigSchema>;
+
+/**
  * Raised when the environment fails validation. `issues` names every offending
  * variable so the operator can fix them all in one pass rather than one per
  * restart.
@@ -44,6 +57,28 @@ export class ConfigError extends Error {
   }
 }
 
+function toIssues(error: z.ZodError): string[] {
+  return error.issues.map((issue) => {
+    const variable = issue.path.join('.') || '(root)';
+    return `${variable}: ${issue.message}`;
+  });
+}
+
+/**
+ * Pure parse of the database-only subset — throws ConfigError, never exits.
+ */
+export function parseDatabaseConfig(
+  env: NodeJS.ProcessEnv = process.env,
+): DatabaseConfig {
+  const result = databaseConfigSchema.safeParse(env);
+
+  if (!result.success) {
+    throw new ConfigError(toIssues(result.error));
+  }
+
+  return result.data;
+}
+
 /**
  * Pure parse — throws ConfigError, never exits. Used directly by tests.
  */
@@ -51,11 +86,7 @@ export function parseConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const result = configSchema.safeParse(env);
 
   if (!result.success) {
-    const issues = result.error.issues.map((issue) => {
-      const variable = issue.path.join('.') || '(root)';
-      return `${variable}: ${issue.message}`;
-    });
-    throw new ConfigError(issues);
+    throw new ConfigError(toIssues(result.error));
   }
 
   return result.data;
@@ -69,6 +100,24 @@ export function parseConfig(env: NodeJS.ProcessEnv = process.env): Config {
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   try {
     return parseConfig(env);
+  } catch (error) {
+    if (error instanceof ConfigError) {
+      process.stderr.write(`${error.message}\n`);
+      process.exit(1);
+    }
+    throw error;
+  }
+}
+
+/**
+ * Startup entry point for database-only scripts. Same fail-fast contract as
+ * `loadConfig`, but without demanding secrets the script does not use.
+ */
+export function loadDatabaseConfig(
+  env: NodeJS.ProcessEnv = process.env,
+): DatabaseConfig {
+  try {
+    return parseDatabaseConfig(env);
   } catch (error) {
     if (error instanceof ConfigError) {
       process.stderr.write(`${error.message}\n`);

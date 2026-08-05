@@ -61,6 +61,20 @@ export async function hashPassword(password: string): Promise<string> {
 }
 
 /**
+ * A real scrypt digest of a value nobody can log in with, used to spend the
+ * same ~50ms on a login for an address that does not exist as on one that
+ * does. Without it an unknown email returns instantly while a wrong password
+ * pays the hashing cost, and the difference reveals which addresses are
+ * registered — the enumeration the identical response bodies exist to prevent.
+ *
+ * Generated once at module load rather than hard-coded so it always matches
+ * the current parameters. The password it encodes is random and discarded.
+ */
+export const DUMMY_PASSWORD_DIGEST: Promise<string> = hashPassword(
+  randomBytes(32).toString('base64url'),
+);
+
+/**
  * Constant-time verification. Returns false rather than throwing on a
  * malformed or unrecognised digest, so a corrupted row cannot 500 the login
  * endpoint or distinguish itself from a wrong password.

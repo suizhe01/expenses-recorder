@@ -127,6 +127,49 @@ export async function markReplaced(
   );
 }
 
+/** How long a revoked session is kept before it is eligible for deletion. */
+export const REVOKED_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
+
+export type PruneResult = {
+  /** Rows deleted because `expires_at` had passed. */
+  expired: number;
+  /** Rows deleted because `revoked_at` was older than the retention window. */
+  revoked: number;
+};
+
+/**
+ * Deletes session rows that can never authenticate again.
+ *
+ * Expired rows go immediately — they are provably useless. Revoked rows are
+ * kept for `REVOKED_RETENTION_MS` first, because they are the only record of
+ * why a reuse-detection cascade fired; deleting them at once would destroy the
+ * evidence for the incident you most want to investigate.
+ *
+ * Deliberately not indexed (EXP-7 NG-3): a sequential scan is cheap at this
+ * table size, and an index would tax every refresh to speed up a rare chore.
+ */
+export async function pruneSessions(
+  executor: Executor,
+  now: Date = new Date(),
+): Promise<PruneResult> {
+  const revokedCutoff = new Date(now.getTime() - REVOKED_RETENTION_MS);
+
+  const expired = await executor.query(
+    `DELETE FROM sessions WHERE expires_at < $1`,
+    [now],
+  );
+
+  const revoked = await executor.query(
+    `DELETE FROM sessions WHERE revoked_at IS NOT NULL AND revoked_at < $1`,
+    [revokedCutoff],
+  );
+
+  return {
+    expired: expired.rowCount ?? 0,
+    revoked: revoked.rowCount ?? 0,
+  };
+}
+
 export function isUsable(session: SessionRow, now: Date = new Date()): boolean {
   return session.revoked_at === null && session.expires_at.getTime() > now.getTime();
 }

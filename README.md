@@ -127,7 +127,38 @@ user is revoked and all devices must log in again. A token revoked by an
 explicit logout is not treated as theft, so a client retrying after logout
 simply gets a 401.
 
+If a refresh arrives while another rotation of the same session is already in
+flight, the endpoint waits up to 3 seconds for the row lock and then returns
+**503** with `Retry-After: 1` rather than 401 — the token is fine, so the client
+should retry rather than send the user back to a login screen.
+
 Auth routes are rate limited to 10 requests per minute per IP. `/health` is not.
+
+### Pruning old sessions
+
+Every refresh retires one session row and creates another, so the `sessions`
+table grows steadily with rows that can no longer authenticate.
+
+```bash
+cd apps/api
+npm run prune:sessions
+```
+
+It deletes:
+
+- every row whose `expires_at` has passed — these provably cannot authenticate
+- every row revoked more than **30 days** ago
+
+Live sessions and recently revoked ones are left alone. The 30-day window keeps
+the evidence around: if reuse detection ever signs you out everywhere, those
+rows are the only record of what happened.
+
+**Nothing runs this automatically.** There is no timer in the API process and no
+scheduled job — run it by hand, or add it to your own crontab:
+
+```cron
+0 4 * * * cd /path/to/expenses-recorder/apps/api && npm run prune:sessions
+```
 
 Passwords must be at least 12 characters, with no composition rules, and are
 stored as salted scrypt digests.

@@ -1,5 +1,5 @@
 import pg from 'pg';
-import type { Config } from './config.js';
+import type { DatabaseConfig } from './config.js';
 
 const { Pool } = pg;
 
@@ -15,7 +15,7 @@ export type Database = {
   close: () => Promise<void>;
 };
 
-export function createDatabase(config: Config): Database {
+export function createDatabase(config: DatabaseConfig): Database {
   const pool = new Pool({
     connectionString: config.DATABASE_URL,
     // Keep the health check honest: without a short timeout an unreachable
