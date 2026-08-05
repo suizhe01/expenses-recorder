@@ -82,6 +82,9 @@ jobs:
             FROM information_schema.columns
             WHERE table_name = 'email_verification_tokens'
           " | grep -qx 'consumed_at,created_at,expires_at,id,token_hash,user_id'
+          # The gate cutoff must exist and hold exactly one row: it is what
+          # keeps the backfill from re-running over pending accounts.
+          psql "$DATABASE_URL" -tAc "SELECT count(*) FROM email_verification_gate" | grep -qx '1'
 
       - name: Test
         run: npm run test --workspace apps/api
