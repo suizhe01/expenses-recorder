@@ -19,6 +19,38 @@ export type Logger = {
   info: (payload: Record<string, unknown>, message: string) => void;
 };
 
+export type ErrorLogger = {
+  error: (payload: Record<string, unknown>, message: string) => void;
+};
+
+/**
+ * AC-4: hands the send to the event loop and returns immediately, so no
+ * response ever waits on it.
+ *
+ * This is a security control, not a performance one. If a caller awaited the
+ * send, only the branch that actually sends would pay the network round-trip
+ * to Resend — tens to hundreds of milliseconds on one path while every
+ * response body stays identical. Timing that difference reveals which
+ * addresses have unverified accounts, which is exactly the enumeration EXP-7
+ * removed from login. Dispatching after the reply keeps observable timing flat
+ * whatever the transport does.
+ *
+ * Failures are logged and go no further: every caller has already decided its
+ * response cannot depend on whether mail was sent.
+ */
+export function dispatchVerificationEmail(
+  transport: EmailTransport,
+  logger: ErrorLogger,
+  message: VerificationEmail,
+): void {
+  void transport.sendVerificationEmail(message).catch((error: unknown) => {
+    logger.error(
+      { err: error, to: message.to, transport: transport.name },
+      'failed to dispatch verification email',
+    );
+  });
+}
+
 /**
  * The only implementation in this issue (EXP-8 NG-1): it logs the link rather
  * than sending anything. This is what makes the flow exercisable end to end

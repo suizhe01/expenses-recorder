@@ -75,13 +75,30 @@ function verify(token?: string) {
   });
 }
 
-/** Registers an account and puts it in the unverified state this issue serves. */
+/**
+ * New accounts are unverified by default since EXP-9, so registering suffices.
+ *
+ * Registration also issues and dispatches a token, which would otherwise trip
+ * the 60-second throttle in every test that then calls resend. Both are
+ * cleared so each test starts from a clean slate.
+ */
 async function unverifiedUser(email: string): Promise<string> {
-  const body = (await register(email)).json();
-  await database.pool.query('UPDATE users SET email_verified = false WHERE id = $1', [
-    body.user.id,
-  ]);
-  return body.user.id;
+  await register(email);
+  const { rows } = await database.pool.query<{ id: string }>(
+    'SELECT id FROM users WHERE email = $1',
+    [email],
+  );
+  await database.pool.query('DELETE FROM email_verification_tokens');
+  sent.length = 0;
+  return rows[0]!.id;
+}
+
+/** An account that has completed verification. */
+async function verifiedUser(email: string): Promise<string> {
+  const id = await unverifiedUser(email);
+  await database.pool.query('UPDATE users SET email_verified = true WHERE id = $1', [id]);
+  await database.pool.query('DELETE FROM email_verification_tokens WHERE user_id = $1', [id]);
+  return id;
 }
 
 function tokenFromUrl(url: string): string {
@@ -99,7 +116,7 @@ describe('POST /auth/resend-verification', () => {
   // AC-3
   it('returns an identical 202 for unregistered, unverified, and verified addresses', async () => {
     await unverifiedUser('pending@x.com');
-    await register('done@x.com'); // email_verified defaults true
+    await verifiedUser('done@x.com');
 
     const unregistered = await resend('nobody@x.com');
     const pending = await resend('pending@x.com');
@@ -116,7 +133,7 @@ describe('POST /auth/resend-verification', () => {
   // AC-3: a token exists only for the case that warrants one.
   it('creates a token and dispatches only for a registered unverified address', async () => {
     await unverifiedUser('pending@x.com');
-    await register('done@x.com');
+    await verifiedUser('done@x.com');
 
     await resend('nobody@x.com');
     await resend('done@x.com');
@@ -222,6 +239,97 @@ describe('POST /auth/resend-verification', () => {
 
     expect(rows[0]?.token_hash).not.toBe(token);
     expect(rows[0]?.token_hash).toBe(hashVerificationToken(token));
+  });
+});
+
+/**
+ * AC-4. Asserted structurally rather than with a stopwatch: a transport whose
+ * send never settles. If a response still arrives, dispatch provably is not on
+ * the request path — which is the property that stops a slow Resend call
+ * turning response time into an account-enumeration oracle.
+ */
+describe('email dispatch never blocks a response', () => {
+  let hung: FastifyInstance;
+  let hangingCalls: number;
+
+  beforeEach(async () => {
+    hangingCalls = 0;
+    hung = buildApp({
+      config,
+      database,
+      emailTransport: {
+        name: 'hanging',
+        sendVerificationEmail: () =>
+          new Promise<void>(() => {
+            hangingCalls += 1;
+          }),
+      },
+    });
+    await hung.ready();
+  });
+
+  afterEach(async () => {
+    await hung.close();
+  });
+
+  it('responds to register, login, and resend while the transport hangs', async () => {
+    const registered = await hung.inject({
+      method: 'POST',
+      url: '/auth/register',
+      payload: { email: 'hang@x.com', password: PASSWORD },
+    });
+    expect(registered.statusCode).toBe(201);
+
+    const loggedIn = await hung.inject({
+      method: 'POST',
+      url: '/auth/login',
+      payload: { email: 'hang@x.com', password: PASSWORD },
+    });
+    expect(loggedIn.statusCode).toBe(403);
+
+    await database.pool.query('DELETE FROM email_verification_tokens');
+
+    const resent = await hung.inject({
+      method: 'POST',
+      url: '/auth/resend-verification',
+      payload: { email: 'hang@x.com' },
+    });
+    expect(resent.statusCode).toBe(202);
+
+    // The sends were started and are still pending — every response above
+    // arrived without waiting for any of them.
+    expect(hangingCalls).toBeGreaterThan(0);
+  }, 10_000);
+
+  it('keeps responses unchanged when the transport rejects', async () => {
+    const rejecting = buildApp({
+      config,
+      database,
+      emailTransport: {
+        name: 'rejecting',
+        sendVerificationEmail: () => Promise.reject(new Error('provider down')),
+      },
+    });
+    await rejecting.ready();
+
+    try {
+      const response = await rejecting.inject({
+        method: 'POST',
+        url: '/auth/register',
+        payload: { email: 'boom@x.com', password: PASSWORD },
+      });
+
+      expect(response.statusCode).toBe(201);
+      expect(response.json()).toEqual({
+        message: 'Check your email to verify your address.',
+      });
+
+      // The account still exists — a provider failure must not lose a signup.
+      const users = await database.pool.query('SELECT id FROM users');
+      expect(users.rowCount).toBe(1);
+    } finally {
+      await rejecting.close();
+    }
   });
 });
 

@@ -33,6 +33,9 @@ jobs:
       DATABASE_URL: postgres://expenses:expenses@localhost:5432/expenses
       JWT_SECRET: ci-only-secret-not-used-outside-github-actions
       PUBLIC_BASE_URL: http://localhost:3000
+      # Deliberately no RESEND_API_KEY: CI must never make network calls, so the
+      # console transport is always selected.
+      MAIL_FROM: ci@example.com
 
     steps:
       - uses: actions/checkout@v4
@@ -79,6 +82,9 @@ jobs:
             FROM information_schema.columns
             WHERE table_name = 'email_verification_tokens'
           " | grep -qx 'consumed_at,created_at,expires_at,id,token_hash,user_id'
+          # The gate cutoff must exist and hold exactly one row: it is what
+          # keeps the backfill from re-running over pending accounts.
+          psql "$DATABASE_URL" -tAc "SELECT count(*) FROM email_verification_gate" | grep -qx '1'
 
       - name: Test
         run: npm run test --workspace apps/api

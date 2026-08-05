@@ -87,6 +87,30 @@ describe('parseConfig', () => {
     }
   });
 
+  // AC-2
+  it('defaults MAIL_FROM to the Resend test sender', () => {
+    expect(parseConfig(validEnv).MAIL_FROM).toBe('onboarding@resend.dev');
+  });
+
+  it('rejects a malformed MAIL_FROM and names it', () => {
+    try {
+      parseConfig({ ...validEnv, MAIL_FROM: 'notanemail' });
+      expect.unreachable('parseConfig should have thrown');
+    } catch (error) {
+      expect((error as ConfigError).issues.join('\n')).toContain('MAIL_FROM');
+    }
+  });
+
+  // AC-1: docker compose expands an unset ${RESEND_API_KEY:-} to "", which
+  // must be treated as absent rather than rejected.
+  it('treats an empty RESEND_API_KEY as absent', () => {
+    expect(parseConfig({ ...validEnv, RESEND_API_KEY: '' }).RESEND_API_KEY).toBeUndefined();
+    expect(parseConfig(validEnv).RESEND_API_KEY).toBeUndefined();
+    expect(parseConfig({ ...validEnv, RESEND_API_KEY: 're_abc' }).RESEND_API_KEY).toBe(
+      're_abc',
+    );
+  });
+
   it('accepts an https PUBLIC_BASE_URL', () => {
     const config = parseConfig({
       ...validEnv,

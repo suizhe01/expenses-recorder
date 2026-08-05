@@ -1,8 +1,11 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import type { Config } from '../config.js';
 import type { Database } from '../db.js';
-import type { EmailTransport } from '../email/transport.js';
+import {
+  dispatchVerificationEmail,
+  type EmailTransport,
+} from '../email/transport.js';
 import {
   createVerificationToken,
   generateVerificationToken,
@@ -64,6 +67,21 @@ const VERIFICATION_DISPATCHED = {
   message: 'If that address needs verification, an email is on its way.',
 } as const;
 
+/**
+ * AC-5 and AC-6: byte-identical whether the account was just created or
+ * already existed, so registration cannot be used to discover which addresses
+ * are taken.
+ */
+const REGISTRATION_ACCEPTED = {
+  message: 'Check your email to verify your address.',
+} as const;
+
+/** AC-8: machine-readable so the app can route to a "resend" screen. */
+const EMAIL_NOT_VERIFIED = {
+  error: 'Email not verified',
+  code: 'email_not_verified',
+} as const;
+
 type UserRow = {
   id: string;
   email: string;
@@ -108,6 +126,55 @@ export function registerAuthRoutes(
     };
   }
 
+  /**
+   * Issues a verification link for `email` and dispatches it, if and only if
+   * that address belongs to an account that is still unverified and outside
+   * the resend throttle. Silent in every other case.
+   *
+   * Shared by registration, login's 403, and the resend endpoint so all three
+   * obey the same throttle and none of them can be told apart by what they do.
+   * Never throws: callers have already committed to their response.
+   */
+  async function offerVerification(
+    request: FastifyRequest,
+    email: string,
+  ): Promise<void> {
+    try {
+      const { rows } = await database.pool.query<{
+        id: string;
+        email_verified: boolean;
+      }>(`SELECT id, email_verified FROM users WHERE email = $1`, [email]);
+
+      const user = rows[0];
+
+      if (!user || user.email_verified) {
+        return;
+      }
+
+      if (await isThrottled(database.pool, user.id)) {
+        return;
+      }
+
+      const token = generateVerificationToken();
+
+      await database.transaction((client) =>
+        createVerificationToken(client, user.id, token),
+      );
+
+      const verificationUrl = new URL('/auth/verify', config.PUBLIC_BASE_URL);
+      verificationUrl.searchParams.set('token', token);
+
+      // AC-4: dispatch is handed to the event loop, so the caller's response
+      // is never waiting on Resend.
+      dispatchVerificationEmail(emailTransport, request.log, {
+        to: email,
+        verificationUrl: verificationUrl.toString(),
+      });
+    } catch (error) {
+      request.log.error({ err: error }, 'failed to offer verification');
+    }
+  }
+
   app.post('/auth/register', async (request, reply) => {
     const parsed = credentialsSchema.safeParse(request.body);
 
@@ -118,34 +185,40 @@ export function registerAuthRoutes(
     }
 
     const { email, password } = parsed.data;
+
+    // AC-11: hashed before the insert is attempted, so the new-account and
+    // existing-account paths do the same work. Skipping it for an address that
+    // already exists would make that branch measurably faster.
     const passwordHash = await hashPassword(password);
 
-    let user: UserRow;
-
     try {
-      const { rows } = await database.pool.query<UserRow>(
-        `INSERT INTO users (email, password_hash)
-         VALUES ($1, $2)
-         RETURNING id, email, created_at`,
+      await database.pool.query(
+        `INSERT INTO users (email, password_hash) VALUES ($1, $2)`,
         [email, passwordHash],
       );
-      user = rows[0] as UserRow;
     } catch (error) {
-      // AC-3: email is citext, so the unique index already collides
-      // case-insensitively. Relying on it rather than a prior SELECT keeps the
-      // check free of a race between two simultaneous registrations.
-      if ((error as { code?: string }).code === UNIQUE_VIOLATION) {
-        return reply
-          .code(409)
-          .send({ error: 'That email address is already registered' });
+      // A unique violation means the address is already taken. That is not an
+      // error here: AC-6 requires the same response either way, and the
+      // existing row is deliberately left exactly as it is — writing the
+      // submitted password would let anyone seize an account by re-registering
+      // its address.
+      //
+      // email is citext, so the index collides case-insensitively. Relying on
+      // it rather than a prior SELECT keeps this free of a race between two
+      // simultaneous registrations.
+      if ((error as { code?: string }).code !== UNIQUE_VIOLATION) {
+        throw error;
       }
-      throw error;
     }
 
-    const refreshToken = generateRefreshToken();
-    await createSession(database.pool, user.id, refreshToken);
+    // AC-5 and AC-6: one response for both outcomes. Returning a user object
+    // for a new account and something else for an existing one would confirm
+    // which addresses are taken — the enumeration this endpoint allowed with
+    // its 409. For an existing address nothing is written: the stored password
+    // hash is untouched, so re-registering can never take over an account.
+    await offerVerification(request, email);
 
-    return reply.code(201).send(issueTokens(user, refreshToken));
+    return reply.code(201).send(REGISTRATION_ACCEPTED);
   });
 
   app.post('/auth/login', async (request, reply) => {
@@ -160,8 +233,11 @@ export function registerAuthRoutes(
 
     const { email, password } = parsed.data;
 
-    const { rows } = await database.pool.query<UserRow & { password_hash: string | null }>(
-      `SELECT id, email, created_at, password_hash FROM users WHERE email = $1`,
+    const { rows } = await database.pool.query<
+      UserRow & { password_hash: string | null; email_verified: boolean }
+    >(
+      `SELECT id, email, created_at, password_hash, email_verified
+       FROM users WHERE email = $1`,
       [email],
     );
 
@@ -178,6 +254,16 @@ export function registerAuthRoutes(
 
     if (!user || user.password_hash === null || !passwordMatches) {
       return reply.code(401).send(INVALID_CREDENTIALS);
+    }
+
+    // AC-8 and AC-9: verification is checked only AFTER the password has been
+    // proven. Checking it first would answer 403 for any registered address
+    // regardless of password, which is precisely the enumeration EXP-7
+    // removed. Reaching this line means the caller already knows the
+    // credentials, so the 403 tells them nothing they did not know.
+    if (!user.email_verified) {
+      await offerVerification(request, email);
+      return reply.code(403).send(EMAIL_NOT_VERIFIED);
     }
 
     const refreshToken = generateRefreshToken();
@@ -304,48 +390,7 @@ export function registerAuthRoutes(
       return reply.code(202).send(VERIFICATION_DISPATCHED);
     }
 
-    const { email } = parsed.data;
-
-    const { rows } = await database.pool.query<{
-      id: string;
-      email_verified: boolean;
-    }>(`SELECT id, email_verified FROM users WHERE email = $1`, [email]);
-
-    const user = rows[0];
-
-    if (!user || user.email_verified) {
-      return reply.code(202).send(VERIFICATION_DISPATCHED);
-    }
-
-    // AC-4: the per-IP rate limit does not protect an inbox — someone
-    // rotating IPs could use a known address to send a stream of mail. This
-    // caps it per account.
-    if (await isThrottled(database.pool, user.id)) {
-      return reply.code(202).send(VERIFICATION_DISPATCHED);
-    }
-
-    const token = generateVerificationToken();
-
-    // AC-5: superseding earlier tokens and inserting the new one share a
-    // transaction, so a failure cannot leave an account with no live link.
-    await database.transaction((client) =>
-      createVerificationToken(client, user.id, token),
-    );
-
-    const verificationUrl = new URL('/auth/verify', config.PUBLIC_BASE_URL);
-    verificationUrl.searchParams.set('token', token);
-
-    try {
-      await emailTransport.sendVerificationEmail({
-        to: email,
-        verificationUrl: verificationUrl.toString(),
-      });
-    } catch (error) {
-      // The token is already issued and the user can ask again, so a transport
-      // failure is logged rather than surfaced — and surfacing it would break
-      // the identical-response guarantee anyway.
-      request.log.error({ err: error }, 'failed to dispatch verification email');
-    }
+    await offerVerification(request, parsed.data.email);
 
     return reply.code(202).send(VERIFICATION_DISPATCHED);
   });
