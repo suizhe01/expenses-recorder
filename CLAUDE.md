@@ -4,7 +4,8 @@ Receipt capture and expense archive for a Malaysian individual. Snap a receipt,
 have it read automatically, confirm the extracted fields, keep the original
 image for as long as you might need to produce it.
 
-**Status:** backend only. Authentication and email verification are complete.
+**Status:** backend only. The auth block is complete — registration, login,
+refresh with rotation, logout, email verification, and password reset.
 No expenses, categories, receipts, or mobile app exist yet.
 
 ## How work happens here
@@ -117,7 +118,17 @@ Project memory holds the agreed build order and the open review findings that
 are waiting for an issue touching the relevant code. Read it rather than
 re-deriving what comes next.
 
-**Email delivery has never been tested.** There is no `RESEND_API_KEY` on the
-development machine, so no verification message has ever actually been received.
-Transport selection and the failure path were confirmed against Resend's live
-API using an invalid key; delivery itself is untried.
+**Email delivery works and has been confirmed end to end** (2026-08-07). A real
+`RESEND_API_KEY` sits in `.env`, which is gitignored. Both messages have been
+received and both links redeemed: a verification link flipped `email_verified`,
+and a reset link set a new password, revoked every session, and confirmed the
+address on an account that had never verified.
+
+Two limits still apply, and both bite later rather than now:
+
+- `MAIL_FROM` defaults to `onboarding@resend.dev`, Resend's shared test sender.
+  It needs no domain and no DNS, but it **only delivers to the address on the
+  Resend account**. Reaching anyone else means verifying a domain you own.
+- `PUBLIC_BASE_URL` is `http://localhost:3000`, so every emailed link only
+  opens on the development machine. That is fine until the Expo app or the
+  deploy runbook arrives, at which point it must change.
