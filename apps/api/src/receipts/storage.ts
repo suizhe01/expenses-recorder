@@ -113,10 +113,7 @@ export type StoredFile = {
   tempPath: string;
 };
 
-export type StoreFailure =
-  | { status: 'too-large' }
-  | { status: 'unsupported-type' }
-  | { status: 'empty' };
+export type StoreFailure = { status: 'unsupported-type' } | { status: 'empty' };
 
 export type StoreResult = { status: 'stored'; file: StoredFile } | StoreFailure;
 
@@ -140,12 +137,22 @@ export function filePath(root: string, userId: string, sha256: string): string {
  *
  * On any rejection the temporary file is removed before returning, so a
  * refused upload leaves nothing behind (AC-3, AC-4).
+ *
+ * EXP-14 AC-7 — **where the size limit is enforced.** Not here. `@fastify/
+ * multipart` is registered with `fileSize: config.MAX_UPLOAD_BYTES` and
+ * enforces it by TRUNCATING the stream rather than raising, so an oversized
+ * upload arrives looking like a complete, under-limit file. The route checks
+ * `part.file.truncated` after this returns and answers 413.
+ *
+ * This function previously carried its own byte counter as well. Because the
+ * plugin cut the stream at exactly the same number, that check could never
+ * fire from an HTTP request — dead code sitting where a reader would
+ * reasonably expect the working guard to be.
  */
 export async function storeUpload(
   root: string,
   userId: string,
   source: Readable,
-  maxBytes: number,
 ): Promise<StoreResult> {
   const directory = userDirectory(root, userId);
   await mkdir(directory, { recursive: true });
@@ -155,7 +162,6 @@ export async function storeUpload(
   const hash = createHash('sha256');
   let byteSize = 0;
   let head = Buffer.alloc(0);
-  let tooLarge = false;
 
   try {
     await pipeline(
@@ -163,13 +169,6 @@ export async function storeUpload(
       async function* (chunks: AsyncIterable<Buffer>) {
         for await (const chunk of chunks) {
           byteSize += chunk.length;
-
-          if (byteSize > maxBytes) {
-            tooLarge = true;
-            // Stop consuming immediately rather than writing the rest of a
-            // file that is already going to be refused.
-            return;
-          }
 
           if (head.length < SIGNATURE_BYTES) {
             head = Buffer.concat([head, chunk]).subarray(0, SIGNATURE_BYTES);
@@ -184,11 +183,6 @@ export async function storeUpload(
   } catch (error) {
     await rm(tempPath, { force: true });
     throw error;
-  }
-
-  if (tooLarge) {
-    await rm(tempPath, { force: true });
-    return { status: 'too-large' };
   }
 
   if (byteSize === 0) {
@@ -228,4 +222,25 @@ export async function commitFile(
 /** Discards an accepted-but-unneeded temporary file, e.g. on a duplicate. */
 export async function discardFile(file: StoredFile): Promise<void> {
   await rm(file.tempPath, { force: true });
+}
+
+/**
+ * EXP-14 AC-1. Whether a receipt's bytes are actually present.
+ *
+ * A live row whose file is gone is not a client error — the receipt exists and
+ * the likeliest cause is a database restored without its volume, which became
+ * possible the moment receipts stopped living in Postgres. The caller needs to
+ * know the bytes cannot be served right now, not that their record is gone.
+ */
+export async function fileIsPresent(
+  root: string,
+  userId: string,
+  sha256: string,
+): Promise<boolean> {
+  try {
+    await access(filePath(root, userId, sha256), constants.R_OK);
+    return true;
+  } catch {
+    return false;
+  }
 }
