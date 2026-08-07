@@ -72,6 +72,20 @@ const configSchema = z.object({
     .int()
     .positive()
     .default(10_485_760),
+  // EXP-15 AC-7, AC-14. Optional for the same reason `RESEND_API_KEY` is:
+  // absent selects an extractor that skips rather than one that fails, so CI
+  // and a fresh clone run with no key and no network.
+  //
+  // An empty string counts as absent — docker compose expands an unset
+  // `${GEMINI_API_KEY:-}` to "", and rejecting that would stop the API booting
+  // for anyone who has not signed up.
+  GEMINI_API_KEY: z.preprocess(
+    (value) => (value === '' ? undefined : value),
+    z.string().min(1).optional(),
+  ),
+  // AC-11. In config so a model upgrade needs no code change; recorded on every
+  // attempt row so an old reading always says which model produced it.
+  GEMINI_MODEL: z.string().min(1).default('gemini-2.5-flash'),
 });
 
 export type Config = z.infer<typeof configSchema>;

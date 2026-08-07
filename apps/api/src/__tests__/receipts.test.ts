@@ -8,6 +8,7 @@ import { buildApp } from '../app.js';
 import { parseConfig, type Config } from '../config.js';
 import { createDatabase, type Database } from '../db.js';
 import type { EmailTransport } from '../email/transport.js';
+import type { ExtractionResult, ReceiptExtractor } from '../receipts/extraction.js';
 import { detectImageType, ensureStorageReady } from '../receipts/storage.js';
 
 const PASSWORD = 'correcthorsebattery';
@@ -24,6 +25,40 @@ const silentTransport: EmailTransport = {
   sendVerificationEmail: async () => {},
   sendPasswordResetEmail: async () => {},
 };
+
+/**
+ * EXP-15 AC-15. Without this, `buildApp` selects the real Gemini extractor
+ * whenever GEMINI_API_KEY is in the environment, and every upload in this file
+ * — sixty of them in the rate-limit tests alone — becomes a live API call.
+ * That is slow, burns quota, and makes assertions depend on what a model
+ * happened to say.
+ */
+const fakeFields = {
+  isReceipt: true,
+  confidence: 0.9,
+  merchantName: 'Test Mart',
+  merchantTaxId: 'W10-1234-56789012',
+  receiptNumber: 'INV-001',
+  purchasedOn: '2026-01-14',
+  purchasedAtTime: '13:45:00',
+  subtotalCents: 1000,
+  taxCents: 60,
+  roundingCents: -2,
+  totalCents: 1058,
+  currency: 'MYR',
+  paymentMethod: 'CASH',
+};
+
+function fakeExtractor(
+  result: ExtractionResult = {
+    status: 'succeeded',
+    fields: fakeFields,
+    promptTokens: 1200,
+    outputTokens: 90,
+  },
+): ReceiptExtractor {
+  return { model: 'fake-model', extract: async () => result };
+}
 
 /** Real signature bytes, padded so every sample clears the 16-byte sniff window. */
 function jpeg(tag = 'a'): Buffer {
@@ -97,7 +132,12 @@ afterAll(async () => {
 
 beforeEach(async () => {
   await database.pool.query('TRUNCATE users CASCADE');
-  app = buildApp({ config, database, emailTransport: silentTransport });
+  app = buildApp({
+    config,
+    database,
+    emailTransport: silentTransport,
+    extractor: fakeExtractor(),
+  });
   await app.ready();
 });
 

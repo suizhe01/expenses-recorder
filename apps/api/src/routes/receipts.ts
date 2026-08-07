@@ -1,5 +1,6 @@
 import { createReadStream } from 'node:fs';
-import type { FastifyInstance } from 'fastify';
+import { readFile } from 'node:fs/promises';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import type { Config } from '../config.js';
 import type { Database } from '../db.js';
@@ -19,6 +20,13 @@ import {
   filePath,
   storeUpload,
 } from '../receipts/storage.js';
+import type { ReceiptExtractor } from '../receipts/extraction.js';
+import {
+  latestExtractionsFor,
+  recordExtraction,
+  toExtraction,
+  type ExtractionRow,
+} from '../receipts/extraction-store.js';
 
 const paramsSchema = z.object({
   id: z.string().uuid(),
@@ -61,6 +69,36 @@ function safeFilename(value: string | undefined): string | null {
 }
 
 /**
+ * EXP-15 AC-9. The reading attached to a receipt.
+ *
+ * Every field is listed because Fastify's serialiser is an allowlist: anything
+ * absent here is stripped from the response. That cut both ways during this
+ * build — the extraction vanished silently until it was declared — and it is
+ * also the guarantee that `prompt_tokens`, `output_tokens` and `cost_micros`
+ * can never leak, since a schema that does not name them cannot emit them.
+ */
+const extractionResponse = {
+  type: ['object', 'null'],
+  properties: {
+    status: { type: 'string' },
+    isReceipt: { type: ['boolean', 'null'] },
+    confidence: { type: ['number', 'null'] },
+    merchantName: { type: ['string', 'null'] },
+    merchantTaxId: { type: ['string', 'null'] },
+    receiptNumber: { type: ['string', 'null'] },
+    purchasedOn: { type: ['string', 'null'] },
+    purchasedAtTime: { type: ['string', 'null'] },
+    subtotalCents: { type: ['integer', 'null'] },
+    taxCents: { type: ['integer', 'null'] },
+    roundingCents: { type: ['integer', 'null'] },
+    totalCents: { type: ['integer', 'null'] },
+    currency: { type: ['string', 'null'] },
+    paymentMethod: { type: ['string', 'null'] },
+    extractedAt: { type: 'string' },
+  },
+} as const;
+
+/**
  * EXP-11. Documentation only — no `body`, `querystring`, or `params` schema,
  * for the reasons recorded in `categories.ts`. The upload body is multipart and
  * is described in prose rather than by a schema, and the file endpoint declares
@@ -75,6 +113,7 @@ const receiptResponse = {
     // Nullable when the client sent no filename; a bare 'string' would strip it.
     originalFilename: { type: ['string', 'null'] },
     createdAt: { type: 'string', format: 'date-time' },
+    extraction: extractionResponse,
   },
 } as const;
 
@@ -86,12 +125,47 @@ const receiptError = {
 export type ReceiptRouteOptions = {
   config: Config;
   database: Database;
+  extractor: ReceiptExtractor;
 };
 
 export function registerReceiptRoutes(
   app: FastifyInstance,
-  { config, database }: ReceiptRouteOptions,
+  { config, database, extractor }: ReceiptRouteOptions,
 ): void {
+  /**
+   * EXP-15 AC-4 to AC-6. Reads the stored bytes, records the attempt, and
+   * returns the row to expose.
+   *
+   * Never throws. Every failure path inside the extractor already resolves to
+   * `failed`, and the write itself is wrapped, because AC-6 is absolute: an
+   * upload must not be lost because a third party had a bad day. If even
+   * recording the attempt fails, the receipt still stands and the request still
+   * succeeds.
+   */
+  async function runExtraction(
+    request: FastifyRequest,
+    receiptId: string,
+    userId: string,
+    sha256: string,
+    contentType: string,
+  ): Promise<ExtractionRow | undefined> {
+    try {
+      const bytes = await readFile(filePath(config.RECEIPTS_PATH, userId, sha256));
+      const result = await extractor.extract({ bytes, contentType });
+
+      if (result.status === 'failed') {
+        request.log.warn(
+          { receiptId, model: extractor.model, reason: result.error },
+          'receipt extraction failed',
+        );
+      }
+
+      return await recordExtraction(database.pool, receiptId, extractor.model, result);
+    } catch (error) {
+      request.log.error({ err: error, receiptId }, 'could not record extraction');
+      return undefined;
+    }
+  }
   // AC-12: the same guard the category routes use, unchanged (NG-9).
   app.addHook('preHandler', requireAuth);
 
@@ -107,8 +181,21 @@ export function registerReceiptRoutes(
     },
   }, async (request, reply) => {
     const rows = await listReceipts(database.pool, authenticatedUserId(request));
+    const extractions = await latestExtractionsFor(
+      database.pool,
+      rows.map((row) => row.id),
+    );
 
-    return reply.code(200).send(rows.map(toReceipt));
+    return reply.code(200).send(
+      rows.map((row) => {
+        const extraction = extractions.get(row.id);
+
+        return {
+          ...toReceipt(row),
+          extraction: extraction ? toExtraction(extraction) : null,
+        };
+      }),
+    );
   });
 
   // AC-13: the limit applies to uploads alone. Listing, fetching and deleting
@@ -176,7 +263,23 @@ export function registerReceiptRoutes(
 
     if (existing) {
       await discardFile(file);
-      return reply.code(200).send(toReceipt(existing));
+
+      // AC-8: dedup is unchanged — no second file, no second receipt row — but
+      // a duplicate upload IS the retry path, so it runs a fresh extraction and
+      // adds an attempt. Without this, "re-upload to try again" would silently
+      // do nothing.
+      const extraction = await runExtraction(
+        request,
+        existing.id,
+        userId,
+        existing.sha256,
+        existing.content_type,
+      );
+
+      return reply.code(200).send({
+        ...toReceipt(existing),
+        extraction: extraction ? toExtraction(extraction) : null,
+      });
     }
 
     // AC-5 and AC-7: committed before the row is inserted, so a receipt can
@@ -204,7 +307,20 @@ export function registerReceiptRoutes(
       return reply.code(409).send({ error: 'Receipt could not be stored' });
     }
 
-    return reply.code(201).send(toReceipt(outcome.receipt));
+    // AC-4: inside the request, so the response carries the reading. AC-6: a
+    // failure here still returns 201 with the receipt intact.
+    const extraction = await runExtraction(
+      request,
+      outcome.receipt.id,
+      userId,
+      file.sha256,
+      file.contentType,
+    );
+
+    return reply.code(201).send({
+      ...toReceipt(outcome.receipt),
+      extraction: extraction ? toExtraction(extraction) : null,
+    });
   });
 
   app.get('/receipts/:id/file', {
