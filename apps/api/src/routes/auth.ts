@@ -16,6 +16,7 @@ import {
   hashPassword,
   verifyPassword,
 } from '../auth/password.js';
+import { seedDefaultCategories } from '../categories/categories.js';
 import {
   createSession,
   findSessionByToken,
@@ -192,16 +193,25 @@ export function registerAuthRoutes(
     const passwordHash = await hashPassword(password);
 
     try {
-      await database.pool.query(
-        `INSERT INTO users (email, password_hash) VALUES ($1, $2)`,
-        [email, passwordHash],
-      );
+      // EXP-12 AC-2: the user row and its nine default categories are one
+      // transaction, so an account can never exist without them and a failed
+      // seed takes the registration down with it rather than leaving a
+      // half-made account.
+      await database.transaction(async (client) => {
+        const { rows } = await client.query<{ id: string }>(
+          `INSERT INTO users (email, password_hash) VALUES ($1, $2) RETURNING id`,
+          [email, passwordHash],
+        );
+
+        await seedDefaultCategories(client, rows[0]!.id);
+      });
     } catch (error) {
       // A unique violation means the address is already taken. That is not an
       // error here: AC-6 requires the same response either way, and the
       // existing row is deliberately left exactly as it is — writing the
       // submitted password would let anyone seize an account by re-registering
-      // its address.
+      // its address. The transaction has already rolled back, so no categories
+      // were seeded either (EXP-12 AC-2).
       //
       // email is citext, so the index collides case-insensitively. Relying on
       // it rather than a prior SELECT keeps this free of a race between two
