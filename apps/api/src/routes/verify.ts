@@ -25,7 +25,20 @@ export function registerVerifyRoute(
   app: FastifyInstance,
   { database }: VerifyRouteOptions,
 ): void {
-  app.get('/auth/verify', async (request, reply) => {
+  app.get('/auth/verify', {
+    schema: {
+      tags: ['Auth'],
+      summary: 'Redeem an email verification link',
+      description:
+        'Opened by a human in a browser from a link in an email, so every outcome is an '
+        + 'HTML page rather than JSON — including the failures. A spent link is treated '
+        + 'as success, because mail clients prefetch and people double-tap.',
+      // EXP-11: no `querystring` schema, or a missing token would return a JSON
+      // validation error to a browser instead of the HTML page. No `response`
+      // schema either: these replies are HTML, and a schema would JSON-encode
+      // them.
+    },
+  }, async (request, reply) => {
     const parsed = querySchema.safeParse(request.query);
 
     // A missing or empty token is indistinguishable to the user from a broken

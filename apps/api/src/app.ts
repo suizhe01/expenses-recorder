@@ -3,6 +3,8 @@ import fastifyJwt from '@fastify/jwt';
 import fastifyRateLimit from '@fastify/rate-limit';
 import fastifyFormbody from '@fastify/formbody';
 import fastifyMultipart from '@fastify/multipart';
+import fastifySwagger from '@fastify/swagger';
+import fastifySwaggerUi from '@fastify/swagger-ui';
 import { createRequire } from 'node:module';
 import type { Config } from './config.js';
 import type { Database } from './db.js';
@@ -66,6 +68,39 @@ export function buildApp({
     return reply.code(statusCode).send({ error: 'Internal Server Error' });
   });
 
+  // EXP-11 AC-1. Generating the document registers no routes of its own, so
+  // this is safe in every environment; only the UI below is gated.
+  app.register(fastifySwagger, {
+    openapi: {
+      info: {
+        title: 'Expenses Recorder API',
+        description:
+          'Receipt capture and expense archive for a Malaysian individual. ' +
+          'Amounts are integer cents in MYR; timestamps are UTC.',
+        version,
+      },
+      components: {
+        securitySchemes: {
+          bearerAuth: { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' },
+        },
+      },
+      tags: [
+        { name: 'Health', description: 'Liveness and database connectivity' },
+        { name: 'Auth', description: 'Registration, sessions, verification, password reset' },
+        { name: 'Categories', description: 'User-owned expense categories' },
+        { name: 'Receipts', description: 'Receipt images' },
+      ],
+    },
+  });
+
+  // AC-2: the browsable UI is development-only. The deploy runbook puts this
+  // API on a public Cloudflare Tunnel, where /docs would hand anyone who found
+  // it a complete map of the auth surface. The document itself stays available
+  // for codegen through `npm run openapi`, which needs no server.
+  if (config.NODE_ENV !== 'production') {
+    app.register(fastifySwaggerUi, { routePrefix: '/docs' });
+  }
+
   app.register(fastifyJwt, { secret: config.JWT_SECRET });
 
   // AC-1: Resend when a key is present, the console transport otherwise, so
@@ -84,7 +119,17 @@ export function buildApp({
     'email transport selected',
   );
 
-  registerHealthRoute(app, { database, version });
+  // EXP-11 AC-1: inside a `register` callback rather than called directly.
+  // `app.register` defers, so a route added straight to the root instance is
+  // created before the Swagger plugin has loaded and its `onRoute` hook exists
+  // — which left /health out of the document entirely. Queuing it keeps it in
+  // order behind Swagger.
+  //
+  // AC-8: still outside the rate-limited scope, so /health stays unlimited, and
+  // still free of the category guard's preHandler.
+  app.register(async (scope) => {
+    registerHealthRoute(scope, { database, version });
+  });
 
   // EXP-12 AC-13: deliberately OUTSIDE the rate-limited scope below. That
   // 10/min budget is sized for unauthenticated login attempts; an app browsing

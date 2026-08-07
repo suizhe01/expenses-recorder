@@ -101,6 +101,62 @@ function fieldErrors(error: z.ZodError): Record<string, string> {
   );
 }
 
+/**
+ * EXP-11. Documentation only — `tags`, `summary`, `security` and `response`.
+ *
+ * There is deliberately no `body` or `querystring` anywhere in this codebase.
+ * Declaring one switches on Fastify request validation, which answers 400
+ * before the handler runs and would undo the deliberate status codes below:
+ * login's uniform 401, resend-verification's fixed 202, logout's idempotent
+ * 204. Validation stays with the zod schemas above.
+ *
+ * Error responses are also left undeclared. Their exact bodies are security
+ * properties — the login 401 must stay byte-identical across every failure
+ * mode — and a response schema silently strips anything it does not mention.
+ */
+/** The exact 401/403/400 bodies these routes send. Declared so the documented
+ *  shapes match reality; the assertions in auth.test.ts prove nothing is
+ *  stripped. */
+const errorResponse = {
+  type: 'object',
+  properties: { error: { type: 'string' } },
+} as const;
+
+const unverifiedResponse = {
+  type: 'object',
+  properties: { error: { type: 'string' }, code: { type: 'string' } },
+} as const;
+
+const validationResponse = {
+  type: 'object',
+  properties: {
+    error: { type: 'string' },
+    fields: { type: 'object', additionalProperties: { type: 'string' } },
+  },
+} as const;
+
+const sessionResponse = {
+  type: 'object',
+  properties: {
+    user: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', format: 'uuid' },
+        email: { type: 'string', format: 'email' },
+        createdAt: { type: 'string', format: 'date-time' },
+      },
+    },
+    accessToken: { type: 'string' },
+    refreshToken: { type: 'string' },
+    expiresIn: { type: 'number' },
+  },
+} as const;
+
+const messageResponse = {
+  type: 'object',
+  properties: { message: { type: 'string' } },
+} as const;
+
 export type AuthRouteOptions = {
   config: Config;
   database: Database;
@@ -176,7 +232,17 @@ export function registerAuthRoutes(
     }
   }
 
-  app.post('/auth/register', async (request, reply) => {
+  app.post('/auth/register', {
+    schema: {
+      tags: ['Auth'],
+      summary: 'Register an account and send a verification email',
+      description:
+        'Answers an identical 201 whether the address was free or already taken, '
+        + 'so registration cannot be used to discover which addresses exist. An '
+        + 'address already in use is left completely untouched.',
+      response: { 201: messageResponse, 400: validationResponse },
+    },
+  }, async (request, reply) => {
     const parsed = credentialsSchema.safeParse(request.body);
 
     if (!parsed.success) {
@@ -231,7 +297,17 @@ export function registerAuthRoutes(
     return reply.code(201).send(REGISTRATION_ACCEPTED);
   });
 
-  app.post('/auth/login', async (request, reply) => {
+  app.post('/auth/login', {
+    schema: {
+      tags: ['Auth'],
+      summary: 'Exchange credentials for an access and refresh token',
+      description:
+        'Returns 401 with one byte-identical body for a wrong password, an unknown '
+        + 'address, and a malformed request. Returns 403 with code '
+        + '`email_not_verified` only after the password has been proven correct.',
+      response: { 200: sessionResponse, 401: errorResponse, 403: unverifiedResponse },
+    },
+  }, async (request, reply) => {
     const parsed = credentialsSchema.safeParse(request.body);
 
     // A malformed body is answered with the same 401 as bad credentials: a 400
@@ -282,7 +358,17 @@ export function registerAuthRoutes(
     return reply.code(200).send(issueTokens(user, refreshToken));
   });
 
-  app.post('/auth/refresh', async (request, reply) => {
+  app.post('/auth/refresh', {
+    schema: {
+      tags: ['Auth'],
+      summary: 'Rotate a refresh token',
+      description:
+        'Both tokens are replaced. Presenting a token that was already rotated is '
+        + 'treated as theft and revokes every session for the user. Returns 503 with '
+        + 'Retry-After when another rotation of the same session is in flight.',
+      response: { 200: sessionResponse, 401: errorResponse, 503: errorResponse },
+    },
+  }, async (request, reply) => {
     const parsed = refreshSchema.safeParse(request.body);
 
     if (!parsed.success) {
@@ -367,7 +453,15 @@ export function registerAuthRoutes(
     return reply.code(200).send(issueTokens(outcome.user, outcome.nextToken));
   });
 
-  app.post('/auth/logout', async (request, reply) => {
+  app.post('/auth/logout', {
+    schema: {
+      tags: ['Auth'],
+      summary: 'Revoke a refresh token',
+      description:
+        'Idempotent: an unknown, already revoked, or missing token still answers 204, '
+        + 'so a client can always reach a signed-out state.',
+    },
+  }, async (request, reply) => {
     const parsed = refreshSchema.safeParse(request.body);
 
     // Logout is idempotent: an unknown or already-revoked token still reports
@@ -391,7 +485,17 @@ export function registerAuthRoutes(
    * endpoint into the account-enumeration oracle that EXP-7 removed from
    * login — an attacker would simply ask here instead.
    */
-  app.post('/auth/resend-verification', async (request, reply) => {
+  app.post('/auth/resend-verification', {
+    schema: {
+      tags: ['Auth'],
+      summary: 'Send another verification email',
+      description:
+        'Always answers the same 202, for a registered address, an unregistered one, '
+        + 'an already-verified one, and a malformed body alike. Any other shape would '
+        + 'make this an account-enumeration oracle. Throttled to one mail a minute.',
+      response: { 202: messageResponse },
+    },
+  }, async (request, reply) => {
     const parsed = resendSchema.safeParse(request.body);
 
     // Even a malformed body gets the same 202: reporting a validation error
@@ -405,7 +509,24 @@ export function registerAuthRoutes(
     return reply.code(202).send(VERIFICATION_DISPATCHED);
   });
 
-  app.get('/auth/me', async (request, reply) => {
+  app.get('/auth/me', {
+    schema: {
+      tags: ['Auth'],
+      summary: 'The signed-in account',
+      security: [{ bearerAuth: [] }],
+      response: {
+        200: {
+          type: 'object',
+          properties: {
+            id: { type: 'string', format: 'uuid' },
+            email: { type: 'string', format: 'email' },
+            createdAt: { type: 'string', format: 'date-time' },
+          },
+        },
+        401: errorResponse,
+      },
+    },
+  }, async (request, reply) => {
     try {
       await request.jwtVerify();
     } catch {
