@@ -72,6 +72,12 @@ export function buildApp({
   // this is safe in every environment; only the UI below is gated.
   app.register(fastifySwagger, {
     openapi: {
+      // 3.1.0 rather than the plugin's 3.0.3 default. Fastify's schemas are
+      // JSON Schema, and 3.1 is the OpenAPI version aligned with it — 3.0.x
+      // forbids the `type: ['string', 'null']` that expresses a nullable
+      // field, which is how `originalFilename` made the document invalid
+      // against the version it declared.
+      openapi: '3.1.0',
       info: {
         title: 'Expenses Recorder API',
         description:

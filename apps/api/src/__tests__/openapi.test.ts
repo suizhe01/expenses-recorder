@@ -75,6 +75,50 @@ describe('the OpenAPI document', () => {
     expect(document().openapi).toMatch(/^3\./);
   });
 
+  /**
+   * The version the document declares has to match the JSON Schema dialect its
+   * schemas actually use. Fastify serialises with JSON Schema, where a nullable
+   * field is `type: ['string', 'null']` — legal in OpenAPI 3.1, forbidden in
+   * 3.0.x, which spells it `nullable: true`. The document previously claimed
+   * 3.0.3 while containing type arrays, so it was invalid against its own
+   * header and a strict generator could have rejected it.
+   *
+   * Asserting the version string alone cannot catch that, which is exactly how
+   * it got through.
+   */
+  it('AC-1: declares a version whose dialect matches the schemas it contains', () => {
+    const doc = document();
+    const typeArrays: string[] = [];
+
+    const walk = (node: unknown, path: string): void => {
+      if (Array.isArray(node)) {
+        node.forEach((item, index) => walk(item, `${path}[${index}]`));
+        return;
+      }
+
+      if (node === null || typeof node !== 'object') {
+        return;
+      }
+
+      for (const [key, value] of Object.entries(node)) {
+        if (key === 'type' && Array.isArray(value)) {
+          typeArrays.push(path);
+        }
+        walk(value, `${path}.${key}`);
+      }
+    };
+
+    walk(doc.paths, 'paths');
+
+    // These exist deliberately — `originalFilename` is genuinely nullable —
+    // so the document must declare a version that permits them.
+    expect(typeArrays.length).toBeGreaterThan(0);
+    expect(
+      doc.openapi,
+      `type arrays at ${typeArrays.join(', ')} require OpenAPI 3.1 or later`,
+    ).toMatch(/^3\.[1-9]/);
+  });
+
   it('AC-6: marks the authenticated routes as requiring a bearer token', () => {
     const doc = document();
 
