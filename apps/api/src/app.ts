@@ -9,6 +9,7 @@ import { registerHealthRoute } from './routes/health.js';
 import { registerAuthRoutes } from './routes/auth.js';
 import { registerVerifyRoute } from './routes/verify.js';
 import { registerResetPasswordRoutes } from './routes/reset-password.js';
+import { registerCategoryRoutes } from './routes/categories.js';
 import { createConsoleTransport, type EmailTransport } from './email/transport.js';
 import { createResendTransport } from './email/resend.js';
 
@@ -55,6 +56,18 @@ export function buildApp({
   );
 
   registerHealthRoute(app, { database, version });
+
+  // EXP-12 AC-13: deliberately OUTSIDE the rate-limited scope below. That
+  // 10/min budget is sized for unauthenticated login attempts; an app browsing
+  // and editing a category list would exhaust it in ordinary use. Access still
+  // requires a valid token.
+  //
+  // Registered in its own encapsulated scope because registerCategoryRoutes
+  // installs a preHandler — on the root instance that hook would also run for
+  // /health, which must stay unauthenticated.
+  app.register(async (scope) => {
+    registerCategoryRoutes(scope, { database });
+  });
 
   // AC-11: the rate limiter is registered inside an encapsulated scope so it
   // applies to the auth routes only. /health is registered on the root
