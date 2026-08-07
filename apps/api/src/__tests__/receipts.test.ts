@@ -560,4 +560,22 @@ describe('rate limiting', () => {
     }
     expect(reads.every((code) => code === 200)).toBe(true);
   });
+
+  it('AC-13: the budget is per account, not per address', async () => {
+    // Both accounts reach the app over the same connection, so a limiter
+    // keyed on the client IP would count them together. Behind the deploy
+    // issue's tunnel that is what every request looks like, which would turn
+    // this limit into one bucket shared by the whole system.
+    const first = await account('busy@example.com');
+    const second = await account('quiet@example.com');
+
+    for (let i = 0; i < 60; i += 1) {
+      await upload(first.token, jpeg(`first-${i}`));
+    }
+
+    expect((await upload(first.token, jpeg('first-over'))).statusCode).toBe(429);
+
+    // The second account has spent none of its own budget.
+    expect((await upload(second.token, jpeg('second-first'))).statusCode).toBe(201);
+  });
 });

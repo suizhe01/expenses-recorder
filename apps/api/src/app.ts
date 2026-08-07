@@ -77,7 +77,21 @@ export function buildApp({
   // opts in (AC-13). An unbounded 10MB write is a different risk from an
   // unbounded row insert.
   app.register(async (scope) => {
-    await scope.register(fastifyRateLimit, { global: false });
+    await scope.register(fastifyRateLimit, {
+      global: false,
+      // AC-13 counts per ACCOUNT. The plugin's default key is the client IP,
+      // which is wrong here in three ways, the last of them serious: one
+      // account on two networks would get double the budget, two accounts
+      // behind one NAT would share a single budget, and behind the Cloudflare
+      // Tunnel of the deploy issue every request carries the tunnel's address
+      // — collapsing the limit into one global bucket for the whole system.
+      keyGenerator: (request) => request.authenticatedUserId ?? request.ip,
+      // The default `onRequest` runs before any preHandler, so the id would
+      // not be set yet. A route-level preHandler runs after the instance-level
+      // preHandler that `requireAuth` is registered as, which is what makes
+      // the key above available.
+      hook: 'preHandler',
+    });
     await scope.register(fastifyMultipart, {
       limits: { files: 1, fileSize: config.MAX_UPLOAD_BYTES },
     });
