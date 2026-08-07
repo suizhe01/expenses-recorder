@@ -97,6 +97,8 @@ starts half-configured.
 | `PUBLIC_BASE_URL` | **yes** | — | Absolute `http://` or `https://` origin the API is reached on. Used to build verification links |
 | `RESEND_API_KEY` | no | — | Resend API key. Unset (or empty) selects the console transport, which logs the link instead of sending |
 | `MAIL_FROM` | no | `onboarding@resend.dev` | Sender address. Must be a valid email |
+| `RECEIPTS_PATH` | no | `./data/receipts` | Directory receipt images are written to. Compose overrides it with the `receipts-data` volume |
+| `MAX_UPLOAD_BYTES` | no | `10485760` | Largest single receipt upload, in bytes |
 | `POSTGRES_USER` | no | `expenses` | Database user created by the Postgres container |
 | `POSTGRES_PASSWORD` | no | `expenses` | Password for that user. Local development only |
 | `POSTGRES_DB` | no | `expenses` | Database created by the Postgres container |

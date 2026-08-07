@@ -2,6 +2,7 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import fastifyJwt from '@fastify/jwt';
 import fastifyRateLimit from '@fastify/rate-limit';
 import fastifyFormbody from '@fastify/formbody';
+import fastifyMultipart from '@fastify/multipart';
 import { createRequire } from 'node:module';
 import type { Config } from './config.js';
 import type { Database } from './db.js';
@@ -10,6 +11,7 @@ import { registerAuthRoutes } from './routes/auth.js';
 import { registerVerifyRoute } from './routes/verify.js';
 import { registerResetPasswordRoutes } from './routes/reset-password.js';
 import { registerCategoryRoutes } from './routes/categories.js';
+import { registerReceiptRoutes } from './routes/receipts.js';
 import { createConsoleTransport, type EmailTransport } from './email/transport.js';
 import { createResendTransport } from './email/resend.js';
 
@@ -67,6 +69,20 @@ export function buildApp({
   // /health, which must stay unauthenticated.
   app.register(async (scope) => {
     registerCategoryRoutes(scope, { database });
+  });
+
+  // EXP-13: receipts get their own scope for the same reason — the guard is a
+  // preHandler and must not escape. Unlike categories, a limiter is registered
+  // here with `global: false`, so it applies only to the upload route that
+  // opts in (AC-13). An unbounded 10MB write is a different risk from an
+  // unbounded row insert.
+  app.register(async (scope) => {
+    await scope.register(fastifyRateLimit, { global: false });
+    await scope.register(fastifyMultipart, {
+      limits: { files: 1, fileSize: config.MAX_UPLOAD_BYTES },
+    });
+
+    registerReceiptRoutes(scope, { config, database });
   });
 
   // AC-11: the rate limiter is registered inside an encapsulated scope so it

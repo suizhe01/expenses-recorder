@@ -36,6 +36,9 @@ jobs:
       # Deliberately no RESEND_API_KEY: CI must never make network calls, so the
       # console transport is always selected.
       MAIL_FROM: ci@example.com
+      # A scratch directory inside the runner workspace; the integration
+      # suites override it per-test with a temporary directory anyway.
+      RECEIPTS_PATH: ${{ github.workspace }}/ci-receipts
 
     steps:
       - uses: actions/checkout@v4

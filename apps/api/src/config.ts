@@ -60,6 +60,18 @@ const configSchema = z.object({
     .string()
     .email({ message: 'must be a valid email address' })
     .default('onboarding@resend.dev'),
+  // EXP-13 AC-14. Where receipt images are written. The default is relative to
+  // the working directory so a bare `npm run dev` works with no setup; compose
+  // overrides it with a named volume so the archive survives a rebuild.
+  RECEIPTS_PATH: z.string().min(1).default('./data/receipts'),
+  // Largest single upload, in bytes. A 12MP phone photo is 2–5MB, so 10MB
+  // accepts every real receipt while bounding what one request can write to a
+  // home disk.
+  MAX_UPLOAD_BYTES: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(10_485_760),
 });
 
 export type Config = z.infer<typeof configSchema>;

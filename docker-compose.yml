@@ -31,6 +31,11 @@ services:
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:3000}
       RESEND_API_KEY: ${RESEND_API_KEY:-}
       MAIL_FROM: ${MAIL_FROM:-onboarding@resend.dev}
+      # Inside the container this is the mount point of the receipts volume,
+      # not the host path — the archive must not live in the bind-mounted
+      # source tree.
+      RECEIPTS_PATH: /data/receipts
+      MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-10485760}
       # Inside the compose network Postgres is reachable on its service name
       # and container port, regardless of the host port mapping above.
       DATABASE_URL: postgres://${POSTGRES_USER:-expenses}:${POSTGRES_PASSWORD:-expenses}@postgres:5432/${POSTGRES_DB:-expenses}
@@ -42,6 +47,11 @@ services:
     volumes:
       - ./apps/api/src:/app/apps/api/src:ro
       - ./apps/api/migrations:/app/apps/api/migrations:ro
+      # EXP-13 AC-15: the first writable volume. Receipt images survive
+      # `docker compose down` and a rebuild, unlike anything in the image.
+      # Note this means postgres-data alone is no longer a complete backup.
+      - receipts-data:/data/receipts
 
 volumes:
   postgres-data:
+  receipts-data:
