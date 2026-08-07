@@ -1,0 +1,342 @@
+/**
+ * EXP-15 — reading a receipt with Gemini.
+ *
+ * Shaped like `email/transport.ts` on purpose: an interface, a real
+ * implementation, a fallback for when it is not configured, and injectability
+ * so tests never reach the network (AC-15).
+ *
+ * Plain `fetch` rather than an SDK. The call is one POST, Node 22 has fetch
+ * built in, and `AbortSignal.timeout` gives the exact 60-second bound AC-5
+ * asks for. An SDK would also bring its own retry behaviour, which NG-3
+ * forbids.
+ */
+
+/** AC-2. Every field is optional: a crumpled receipt may not show a tax number. */
+export type ExtractedFields = {
+  isReceipt: boolean | null;
+  confidence: number | null;
+  merchantName: string | null;
+  merchantTaxId: string | null;
+  receiptNumber: string | null;
+  purchasedOn: string | null;
+  purchasedAtTime: string | null;
+  subtotalCents: number | null;
+  taxCents: number | null;
+  roundingCents: number | null;
+  totalCents: number | null;
+  currency: string | null;
+  paymentMethod: string | null;
+};
+
+export type ExtractionResult =
+  | {
+      status: 'succeeded';
+      fields: ExtractedFields;
+      promptTokens: number | null;
+      outputTokens: number | null;
+    }
+  | { status: 'failed'; error: string }
+  | { status: 'skipped' };
+
+export type ReceiptImage = {
+  bytes: Buffer;
+  contentType: string;
+};
+
+export type ReceiptExtractor = {
+  /** Recorded on every attempt row, so an old reading says what produced it. */
+  readonly model: string;
+  extract: (image: ReceiptImage) => Promise<ExtractionResult>;
+};
+
+/**
+ * AC-7. Used when no `GEMINI_API_KEY` is configured: makes no network call and
+ * reports `skipped`, so an upload still succeeds and the attempt is on record.
+ *
+ * `skipped` rather than `failed` deliberately — otherwise every test run and
+ * every keyless machine would look like Gemini was broken, and a real outage
+ * would be lost in that noise.
+ */
+export function createSkippingExtractor(model: string): ReceiptExtractor {
+  return {
+    model,
+    extract: async () => ({ status: 'skipped' }),
+  };
+}
+
+/**
+ * Amounts come back as they are printed — "12.35", "RM 1,234.50", "-0.02" —
+ * and are converted here rather than by the model.
+ *
+ * Asking Gemini for integer cents would make it do arithmetic, which it gets
+ * wrong more often than it misreads a number. Parsing a printed decimal is
+ * deterministic and testable, and it keeps floats out of the money path
+ * entirely (AC-3): the string is split on the decimal point and assembled with
+ * integer maths.
+ */
+export function parseAmountToCents(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return Math.round(value * 100);
+  }
+
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  const cleaned = value.replace(/[^0-9.,-]/g, '').replace(/,/g, '');
+
+  if (cleaned === '' || !/^-?\d*\.?\d*$/.test(cleaned)) {
+    return null;
+  }
+
+  const negative = cleaned.startsWith('-');
+  const [whole = '0', fraction = ''] = cleaned.replace('-', '').split('.');
+
+  if (whole === '' && fraction === '') {
+    return null;
+  }
+
+  const cents =
+    Number(whole || '0') * 100 + Number(fraction.padEnd(2, '0').slice(0, 2) || '0');
+
+  return negative ? -cents : cents;
+}
+
+/**
+ * Rates for `gemini-2.5-flash`, in micros (millionths of a dollar) per token,
+ * as published in August 2026: $0.30 per million input tokens and $2.50 per
+ * million output.
+ *
+ * The cost this produces is an estimate and nothing depends on it. Google's
+ * prices change and an attempt row is historical, so the token counts stored
+ * alongside it are the durable truth — if these constants drift, past rows stay
+ * meaningful and only the convenience figure is stale.
+ */
+const INPUT_MICROS_PER_TOKEN = 0.3;
+const OUTPUT_MICROS_PER_TOKEN = 2.5;
+
+export function estimateCostMicros(
+  promptTokens: number | null,
+  outputTokens: number | null,
+): number | null {
+  if (promptTokens === null && outputTokens === null) {
+    return null;
+  }
+
+  return Math.round(
+    (promptTokens ?? 0) * INPUT_MICROS_PER_TOKEN +
+      (outputTokens ?? 0) * OUTPUT_MICROS_PER_TOKEN,
+  );
+}
+
+const PROMPT = [
+  'You are reading a photograph of a retail receipt or tax invoice, most likely',
+  'from Malaysia. Return only the fields defined by the response schema.',
+  '',
+  'Rules:',
+  '- If the image is not a receipt or invoice at all, set isReceipt to false and',
+  '  leave every other field null. Do not guess.',
+  '- Report amounts exactly as printed, including the decimal point, without a',
+  '  currency symbol. Do not convert, round, or recalculate them.',
+  '- rounding is the "rounding adjustment" line many Malaysian receipts carry to',
+  '  reach the nearest 5 sen. It is negative when the total was rounded down.',
+  '- merchantTaxId is the SST, GST, or tax registration number if one is shown.',
+  '- purchasedOn is the transaction date as YYYY-MM-DD. Malaysian receipts are',
+  '  usually DD/MM/YYYY — read them that way, not as US month-first dates.',
+  '- purchasedAtTime is 24-hour HH:MM:SS if a time is shown.',
+  '- currency is the ISO code, MYR unless the receipt clearly says otherwise.',
+  '- confidence is your overall confidence in this reading, 0 to 1.',
+  '- Leave any field null when the receipt does not show it. A missing value is',
+  '  always better than an invented one.',
+].join('\n');
+
+/** The schema Gemini is constrained to (AC-12). Amounts are strings; see above. */
+const RESPONSE_SCHEMA = {
+  type: 'OBJECT',
+  properties: {
+    isReceipt: { type: 'BOOLEAN' },
+    confidence: { type: 'NUMBER', nullable: true },
+    merchantName: { type: 'STRING', nullable: true },
+    merchantTaxId: { type: 'STRING', nullable: true },
+    receiptNumber: { type: 'STRING', nullable: true },
+    purchasedOn: { type: 'STRING', nullable: true },
+    purchasedAtTime: { type: 'STRING', nullable: true },
+    subtotal: { type: 'STRING', nullable: true },
+    tax: { type: 'STRING', nullable: true },
+    rounding: { type: 'STRING', nullable: true },
+    total: { type: 'STRING', nullable: true },
+    currency: { type: 'STRING', nullable: true },
+    paymentMethod: { type: 'STRING', nullable: true },
+  },
+  required: ['isReceipt'],
+} as const;
+
+const ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models';
+
+/** AC-5. One bound on the whole call; there is no retry (NG-3). */
+export const EXTRACTION_TIMEOUT_MS = 60_000;
+
+function text(value: unknown): string | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  const trimmed = value.trim();
+
+  return trimmed === '' ? null : trimmed;
+}
+
+/** Maps the model's JSON onto AC-2's fields, converting amounts to cents. */
+export function toFields(payload: Record<string, unknown>): ExtractedFields {
+  const isReceipt =
+    typeof payload.isReceipt === 'boolean' ? payload.isReceipt : null;
+
+  // AC-13: the model saying "not a receipt" is a correct answer, and nothing
+  // it may have guessed alongside that is worth keeping.
+  if (isReceipt === false) {
+    return {
+      isReceipt: false,
+      confidence:
+        typeof payload.confidence === 'number' ? payload.confidence : null,
+      merchantName: null,
+      merchantTaxId: null,
+      receiptNumber: null,
+      purchasedOn: null,
+      purchasedAtTime: null,
+      subtotalCents: null,
+      taxCents: null,
+      roundingCents: null,
+      totalCents: null,
+      currency: null,
+      paymentMethod: null,
+    };
+  }
+
+  return {
+    isReceipt,
+    confidence: typeof payload.confidence === 'number' ? payload.confidence : null,
+    merchantName: text(payload.merchantName),
+    merchantTaxId: text(payload.merchantTaxId),
+    receiptNumber: text(payload.receiptNumber),
+    purchasedOn: text(payload.purchasedOn),
+    purchasedAtTime: text(payload.purchasedAtTime),
+    subtotalCents: parseAmountToCents(payload.subtotal),
+    taxCents: parseAmountToCents(payload.tax),
+    roundingCents: parseAmountToCents(payload.rounding),
+    totalCents: parseAmountToCents(payload.total),
+    currency: text(payload.currency)?.toUpperCase() ?? null,
+    paymentMethod: text(payload.paymentMethod),
+  };
+}
+
+export type GeminiExtractorOptions = {
+  apiKey: string;
+  model: string;
+  timeoutMs?: number;
+};
+
+type GeminiResponse = {
+  candidates?: { content?: { parts?: { text?: string }[] } }[];
+  usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number };
+  error?: { message?: string };
+};
+
+/**
+ * AC-4, AC-6, AC-12. Every failure mode — a non-200, a refusal, output that
+ * will not parse — returns `failed` with a reason rather than throwing, so the
+ * caller can record it and still answer 201. Nothing here can cost a user their
+ * receipt.
+ */
+export function createGeminiExtractor({
+  apiKey,
+  model,
+  timeoutMs = EXTRACTION_TIMEOUT_MS,
+}: GeminiExtractorOptions): ReceiptExtractor {
+  return {
+    model,
+    async extract({ bytes, contentType }: ReceiptImage): Promise<ExtractionResult> {
+      let response: Response;
+
+      try {
+        response = await fetch(
+          `${ENDPOINT}/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`,
+          {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            signal: AbortSignal.timeout(timeoutMs),
+            body: JSON.stringify({
+              contents: [
+                {
+                  parts: [
+                    { text: PROMPT },
+                    {
+                      inline_data: {
+                        mime_type: contentType,
+                        data: bytes.toString('base64'),
+                      },
+                    },
+                  ],
+                },
+              ],
+              generationConfig: {
+                responseMimeType: 'application/json',
+                responseSchema: RESPONSE_SCHEMA,
+              },
+            }),
+          },
+        );
+      } catch (error) {
+        // Includes the AbortError a timeout raises.
+        return { status: 'failed', error: `request failed: ${String(error)}` };
+      }
+
+      let payload: GeminiResponse;
+
+      try {
+        payload = (await response.json()) as GeminiResponse;
+      } catch (error) {
+        return {
+          status: 'failed',
+          error: `response was not JSON (HTTP ${response.status}): ${String(error)}`,
+        };
+      }
+
+      if (!response.ok) {
+        return {
+          status: 'failed',
+          error: `HTTP ${response.status}: ${payload.error?.message ?? 'unknown error'}`,
+        };
+      }
+
+      const body = payload.candidates?.[0]?.content?.parts?.[0]?.text;
+
+      if (typeof body !== 'string') {
+        // A refusal or a safety block lands here: 200, but no content.
+        return {
+          status: 'failed',
+          error: `no content in response: ${JSON.stringify(payload).slice(0, 500)}`,
+        };
+      }
+
+      let parsed: unknown;
+
+      try {
+        parsed = JSON.parse(body);
+      } catch {
+        // AC-12: the raw response is kept, and no partial row is written.
+        return { status: 'failed', error: `model output was not JSON: ${body.slice(0, 500)}` };
+      }
+
+      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        return { status: 'failed', error: `model output was not an object: ${body.slice(0, 500)}` };
+      }
+
+      return {
+        status: 'succeeded',
+        fields: toFields(parsed as Record<string, unknown>),
+        promptTokens: payload.usageMetadata?.promptTokenCount ?? null,
+        outputTokens: payload.usageMetadata?.candidatesTokenCount ?? null,
+      };
+    },
+  };
+}

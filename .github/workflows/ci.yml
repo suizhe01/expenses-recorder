@@ -39,6 +39,9 @@ jobs:
       # A scratch directory inside the runner workspace; the integration
       # suites override it per-test with a temporary directory anyway.
       RECEIPTS_PATH: ${{ github.workspace }}/ci-receipts
+      # Deliberately no GEMINI_API_KEY, for the same reason as RESEND: CI must
+      # never make network calls. Extraction is skipped, and every test that
+      # exercises it injects a fake extractor.
 
     steps:
       - uses: actions/checkout@v4

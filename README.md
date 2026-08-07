@@ -99,6 +99,8 @@ starts half-configured.
 | `MAIL_FROM` | no | `onboarding@resend.dev` | Sender address. Must be a valid email |
 | `RECEIPTS_PATH` | no | `./data/receipts` | Directory receipt images are written to. Compose overrides it with the `receipts-data` volume |
 | `MAX_UPLOAD_BYTES` | no | `10485760` | Largest single receipt upload, in bytes |
+| `GEMINI_API_KEY` | no | — | Google AI Studio key. Unset (or empty) skips extraction; uploads still succeed |
+| `GEMINI_MODEL` | no | `gemini-2.5-flash` | Model receipts are read with, recorded on every attempt |
 | `POSTGRES_USER` | no | `expenses` | Database user created by the Postgres container |
 | `POSTGRES_PASSWORD` | no | `expenses` | Password for that user. Local development only |
 | `POSTGRES_DB` | no | `expenses` | Database created by the Postgres container |

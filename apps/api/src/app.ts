@@ -16,6 +16,11 @@ import { registerCategoryRoutes } from './routes/categories.js';
 import { registerReceiptRoutes } from './routes/receipts.js';
 import { createConsoleTransport, type EmailTransport } from './email/transport.js';
 import { createResendTransport } from './email/resend.js';
+import {
+  createGeminiExtractor,
+  createSkippingExtractor,
+  type ReceiptExtractor,
+} from './receipts/extraction.js';
 
 const require = createRequire(import.meta.url);
 const pkg = require('../package.json') as { version: string };
@@ -30,12 +35,20 @@ export type BuildAppOptions = {
    * observe what would have been sent without reading log output.
    */
   emailTransport?: EmailTransport;
+  /**
+   * Defaults to Gemini when a key is configured, and to a skipping extractor
+   * otherwise (EXP-15 AC-7). Injectable so tests never reach the network —
+   * not merely because CI has no key, but because the model's output varies
+   * between runs and an assertion on a merchant name would flake (AC-15).
+   */
+  extractor?: ReceiptExtractor;
 };
 
 export function buildApp({
   config,
   database,
   emailTransport,
+  extractor,
 }: BuildAppOptions): FastifyInstance {
   const app = Fastify({
     logger: { level: config.LOG_LEVEL },
@@ -125,6 +138,26 @@ export function buildApp({
     'email transport selected',
   );
 
+  // AC-7: no key means skip, not fail. A failing extractor would make every
+  // keyless machine look like Gemini was broken and bury a real outage in the
+  // noise.
+  const receiptExtractor =
+    extractor ??
+    (config.GEMINI_API_KEY
+      ? createGeminiExtractor({
+          apiKey: config.GEMINI_API_KEY,
+          model: config.GEMINI_MODEL,
+        })
+      : createSkippingExtractor(config.GEMINI_MODEL));
+
+  app.log.info(
+    {
+      extraction: config.GEMINI_API_KEY || extractor ? 'enabled' : 'skipped',
+      model: receiptExtractor.model,
+    },
+    'receipt extraction configured',
+  );
+
   // EXP-11 AC-1: inside a `register` callback rather than called directly.
   // `app.register` defers, so a route added straight to the root instance is
   // created before the Swagger plugin has loaded and its `onRoute` hook exists
@@ -174,7 +207,7 @@ export function buildApp({
       limits: { files: 1, fileSize: config.MAX_UPLOAD_BYTES },
     });
 
-    registerReceiptRoutes(scope, { config, database });
+    registerReceiptRoutes(scope, { config, database, extractor: receiptExtractor });
   });
 
   // AC-11: the rate limiter is registered inside an encapsulated scope so it

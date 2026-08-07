@@ -36,6 +36,8 @@ services:
       # source tree.
       RECEIPTS_PATH: /data/receipts
       MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-10485760}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
       # Inside the compose network Postgres is reachable on its service name
       # and container port, regardless of the host port mapping above.
       DATABASE_URL: postgres://${POSTGRES_USER:-expenses}:${POSTGRES_PASSWORD:-expenses}@postgres:5432/${POSTGRES_DB:-expenses}
