@@ -4,9 +4,16 @@ Receipt capture and expense archive for a Malaysian individual. Snap a receipt,
 have it read automatically, confirm the extracted fields, keep the original
 image for as long as you might need to produce it.
 
-**Status:** backend only. The auth block is complete — registration, login,
-refresh with rotation, logout, email verification, and password reset.
-No expenses, categories, receipts, or mobile app exist yet.
+**Status:** backend only, and complete through receipt extraction. Auth
+(registration, login, refresh with rotation, logout, email verification,
+password reset), category CRUD, receipt upload with on-disk storage, and Gemini
+extraction of the tax-invoice fields all work — extraction is verified against
+real photographs, not only tests. An OpenAPI document is served at `/docs` in
+development.
+
+**Nothing records an expense yet.** There is no `expenses` table, so a receipt
+and its extracted fields have nowhere to be confirmed and kept. That is chain
+item 7 and the next thing to build. No mobile app exists.
 
 ## How work happens here
 
@@ -77,6 +84,19 @@ simplify these without understanding them:
   token.** A client retrying after logout is not theft.
 - **The verification backfill is scoped to a recorded cutoff.** An unscoped
   re-run marks every pending signup verified — this was a real, reproduced bug.
+- **A Gemini failure never fails an upload.** Every outcome — timeout, rate
+  limit, refusal, unparseable output — becomes a recorded `failed` attempt and
+  still returns 201 with the receipt stored. A third party's bad day must not
+  cost someone their receipt.
+- **Token counts and `cost_micros` appear in no API response.** They live in
+  `receipt_extractions` for the developer and are read with `psql`. Both the
+  store's type and its SELECT omit them, so exposing them takes two deliberate
+  edits.
+- **5xx bodies are generic.** A global error handler replaces every 5xx body
+  with `{"error":"Internal Server Error"}` and logs the real one; 4xx passes
+  through untouched so the rate limiter keeps its `Retry-After`. This exists
+  because an ENOENT once returned the absolute storage path, the owner's id and
+  a content hash to the client.
 
 ## Stack and conventions
 
@@ -85,7 +105,16 @@ No native modules — scrypt comes from `node:crypto` deliberately, so the alpin
 image needs no build toolchain.
 
 - Routes follow `registerXRoute(app, deps)`; `buildApp({config, database})` is
-  testable via `app.inject()`
+  testable via `app.inject()`. External services are injected the same way —
+  `emailTransport` and `extractor` — so **no test ever makes a network call**
+- **A Fastify response schema is an allowlist.** Anything it does not name is
+  stripped from the response. Adding a field to a payload means adding it to
+  the schema too, or it silently vanishes — this has already cost one debugging
+  session. It is also what guarantees cost and tokens cannot leak
+- **Never declare `body`, `querystring`, or `params` schemas.** Any of them
+  switches on Fastify request validation, which answers 400 before the handler
+  runs and would undo login's uniform 401, resend-verification's fixed 202,
+  logout's idempotent 204, and the HTML error pages. A test greps for all three
 - Config is one zod schema with fail-fast validation naming the offending
   variable. Add new variables there, plus `.env.example`, `docker-compose.yml`,
   the CI workflow, and the README table
@@ -99,8 +128,18 @@ image needs no build toolchain.
 cp .env.example .env && docker compose up -d --build
 cd apps/api
 npm run migrate          # then: lint, typecheck, test, build
+npm run openapi          # writes openapi.json, no server or secrets needed
 npm run prune:sessions   # maintenance, nothing schedules it
 ```
+
+Two container traps, both hit more than once:
+
+- Adding a **dependency** needs `docker compose up -d --build`; `node_modules`
+  is baked into the image and a restart gives `ERR_MODULE_NOT_FOUND`.
+- Adding an **environment variable** needs `docker compose up -d`; `restart`
+  reuses the old environment, so the variable silently never arrives.
+- `tsx watch` does not always pick up **newly added files**, so a hand-verified
+  404 may be a stale process rather than a bug. Check the boot timestamp.
 
 Compose publishes Postgres on **5433**, not 5432, to avoid colliding with a
 local install.
