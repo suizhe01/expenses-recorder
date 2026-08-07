@@ -10,9 +10,21 @@ export type VerificationEmail = {
   verificationUrl: string;
 };
 
+/**
+ * EXP-10 / AC-13. Structurally identical to `VerificationEmail`, and kept as
+ * its own type rather than shared: the two links have different lifetimes and
+ * different consequences, so a transport must not be able to send one where
+ * the other was meant.
+ */
+export type PasswordResetEmail = {
+  to: string;
+  resetUrl: string;
+};
+
 export type EmailTransport = {
   readonly name: string;
   sendVerificationEmail: (message: VerificationEmail) => Promise<void>;
+  sendPasswordResetEmail: (message: PasswordResetEmail) => Promise<void>;
 };
 
 export type Logger = {
@@ -52,6 +64,29 @@ export function dispatchVerificationEmail(
 }
 
 /**
+ * AC-5: the reset counterpart of `dispatchVerificationEmail`, and it exists
+ * for the same reason rather than for symmetry alone.
+ *
+ * `/auth/forgot-password` answers one fixed 202 for every input. If the send
+ * were awaited, only the branch that actually sends would pay the round-trip
+ * to Resend, so the response time would say what the body refuses to — whether
+ * that address has an account. Dispatching after the reply keeps every path
+ * flat.
+ */
+export function dispatchPasswordResetEmail(
+  transport: EmailTransport,
+  logger: ErrorLogger,
+  message: PasswordResetEmail,
+): void {
+  void transport.sendPasswordResetEmail(message).catch((error: unknown) => {
+    logger.error(
+      { err: error, to: message.to, transport: transport.name },
+      'failed to dispatch password reset email',
+    );
+  });
+}
+
+/**
  * The only implementation in this issue (EXP-8 NG-1): it logs the link rather
  * than sending anything. This is what makes the flow exercisable end to end
  * with no API key, no sending domain, and no network in CI.
@@ -67,6 +102,12 @@ export function createConsoleTransport(logger: Logger): EmailTransport {
       logger.info(
         { to, verificationUrl },
         'Verification email not sent — no transport configured. Open this URL to verify:',
+      );
+    },
+    async sendPasswordResetEmail({ to, resetUrl }) {
+      logger.info(
+        { to, resetUrl },
+        'Password reset email not sent — no transport configured. Open this URL to reset:',
       );
     },
   };
