@@ -15,6 +15,7 @@ import {
 import {
   commitFile,
   discardFile,
+  fileIsPresent,
   filePath,
   storeUpload,
 } from '../receipts/storage.js';
@@ -33,6 +34,14 @@ const NO_FILE = { error: 'Expected one file part' } as const;
 const TOO_LARGE = { error: 'File is larger than the upload limit' } as const;
 const UNSUPPORTED = {
   error: 'File must be a JPEG, PNG, WebP, or HEIC image',
+} as const;
+
+/**
+ * EXP-14 AC-1. The receipt exists; its bytes cannot be served right now. Says
+ * nothing about where the file should have been.
+ */
+const FILE_UNAVAILABLE = {
+  error: 'Receipt image is temporarily unavailable',
 } as const;
 
 /** AC-13. Applied to `POST /receipts` only, via that route's own config. */
@@ -86,16 +95,7 @@ export function registerReceiptRoutes(
     // AC-3 to AC-5. The stream is hashed, measured and sniffed on its way to a
     // temporary file; nothing is placed under its final name until it has been
     // accepted.
-    const result = await storeUpload(
-      config.RECEIPTS_PATH,
-      userId,
-      part.file,
-      config.MAX_UPLOAD_BYTES,
-    );
-
-    if (result.status === 'too-large') {
-      return reply.code(413).send(TOO_LARGE);
-    }
+    const result = await storeUpload(config.RECEIPTS_PATH, userId, part.file);
 
     if (result.status === 'unsupported-type' || result.status === 'empty') {
       return reply.code(415).send(UNSUPPORTED);
@@ -165,6 +165,33 @@ export function registerReceiptRoutes(
     // against the caller. There is no way to reach another user's directory.
     if (!row) {
       return reply.code(404).send(NOT_FOUND);
+    }
+
+    // EXP-14 AC-1: check before streaming. Handing `createReadStream` a path
+    // that does not exist produced a 500 whose body carried the absolute path,
+    // the owner's id and the content hash.
+    //
+    // There is still a window between this check and the read — the file could
+    // vanish in between — but that lands on the global error handler, which
+    // now returns a generic body. This turns the case that actually happens,
+    // a database restored without its volume, into an honest answer.
+    if (!(await fileIsPresent(config.RECEIPTS_PATH, userId, row.sha256))) {
+      // The path goes in the log and nowhere near the response: an operator
+      // needs somewhere to look, and this is the one place it is safe to say.
+      request.log.error(
+        {
+          receiptId: row.id,
+          sha256: row.sha256,
+          userId,
+          path: filePath(config.RECEIPTS_PATH, userId, row.sha256),
+        },
+        'receipt row is live but its file is missing from storage',
+      );
+
+      // Deliberately no Retry-After: a refresh lock clears in a second, but a
+      // missing volume needs a human. Advising a retry the client would obey
+      // is worse than none.
+      return reply.code(503).send(FILE_UNAVAILABLE);
     }
 
     // AC-9: a receipt is private and may be produced as evidence years later.

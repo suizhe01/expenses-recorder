@@ -287,6 +287,11 @@ describe('POST /receipts', () => {
     );
 
     expect(response.statusCode).toBe(415);
+    // EXP-14 AC-3: a 4xx keeps its own specific message rather than being
+    // flattened into the generic 5xx body.
+    expect(response.json()).toEqual({
+      error: 'File must be a JPEG, PNG, WebP, or HEIC image',
+    });
     expect(await storedFiles(userId)).toEqual([]);
     expect(await tempFiles(userId)).toEqual([]);
 
@@ -446,6 +451,33 @@ describe('GET /receipts/:id/file', () => {
     const { token } = await account('missing@example.com');
 
     expect((await fetchFile(token, UNKNOWN_ID)).statusCode).toBe(404);
+  });
+
+  // EXP-14 AC-1.
+  it('EXP-14 AC-1: a live row whose file is gone answers 503, revealing nothing', async () => {
+    const { token, userId } = await account('vanished@example.com');
+    const created = await upload(token, jpeg());
+    const { id } = created.json() as { id: string };
+
+    const { rows } = await database.pool.query<{ sha256: string }>(
+      'SELECT sha256 FROM receipts WHERE id = $1',
+      [id],
+    );
+    const sha256 = rows[0]!.sha256;
+
+    // Exactly the state a database restored without its volume produces.
+    await rm(join(root, userId, sha256));
+
+    const response = await fetchFile(token, id);
+
+    expect(response.statusCode).toBe(503);
+    // Not 404: the receipt exists, the bytes are just not available.
+    expect(response.body).not.toContain(root);
+    expect(response.body).not.toContain(sha256);
+    expect(response.body).not.toContain(userId);
+    expect(response.body).not.toContain('ENOENT');
+    // And no Retry-After, because no retry can fix a missing volume.
+    expect(response.headers['retry-after']).toBeUndefined();
   });
 });
 

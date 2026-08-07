@@ -1,4 +1,4 @@
-import Fastify, { type FastifyInstance } from 'fastify';
+import Fastify, { type FastifyError, type FastifyInstance } from 'fastify';
 import fastifyJwt from '@fastify/jwt';
 import fastifyRateLimit from '@fastify/rate-limit';
 import fastifyFormbody from '@fastify/formbody';
@@ -37,6 +37,33 @@ export function buildApp({
 }: BuildAppOptions): FastifyInstance {
   const app = Fastify({
     logger: { level: config.LOG_LEVEL },
+  });
+
+  // EXP-14 AC-2 to AC-4. Set on the root instance, so every scope below
+  // inherits it and any route added later is covered without being remembered.
+  //
+  // Fastify's default serialises a thrown error's `message` into the response.
+  // For a 5xx that message is written by whatever failed — an ENOENT, for
+  // instance, carries the absolute path it tried to open, which is how a
+  // missing receipt file was handing out the storage layout, the owner's id
+  // and the content hash. Nothing a client can act on is lost by replacing it:
+  // a 5xx means the server failed, and the detail belongs in the log.
+  //
+  // 4xx is passed straight through. Those messages are written by this
+  // codebase and are the whole point of the response — "must be at least 12
+  // characters", the rate limiter's retry advice — and re-sending the error
+  // keeps the default serialisation and any headers already set on the reply,
+  // such as `Retry-After`.
+  app.setErrorHandler((error: FastifyError, request, reply) => {
+    const statusCode = error.statusCode ?? 500;
+
+    if (statusCode < 500) {
+      return reply.code(statusCode).send(error);
+    }
+
+    request.log.error({ err: error }, 'request failed');
+
+    return reply.code(statusCode).send({ error: 'Internal Server Error' });
   });
 
   app.register(fastifyJwt, { secret: config.JWT_SECRET });
