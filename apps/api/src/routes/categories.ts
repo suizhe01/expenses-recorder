@@ -50,6 +50,35 @@ function fieldErrors(error: z.ZodError): Record<string, string> {
   );
 }
 
+/**
+ * EXP-11. Documentation only. No `body`, `querystring`, or **`params`** schema
+ * appears here: any of the three switches on Fastify request validation, and a
+ * `params` schema in particular would turn a malformed uuid into a 400, where
+ * EXP-12 AC-11 requires the same 404 an unknown id gets.
+ */
+const categoryResponse = {
+  type: 'object',
+  properties: {
+    id: { type: 'string', format: 'uuid' },
+    name: { type: 'string' },
+    createdAt: { type: 'string', format: 'date-time' },
+    updatedAt: { type: 'string', format: 'date-time' },
+  },
+} as const;
+
+const categoryError = {
+  type: 'object',
+  properties: { error: { type: 'string' } },
+} as const;
+
+const categoryValidationError = {
+  type: 'object',
+  properties: {
+    error: { type: 'string' },
+    fields: { type: 'object', additionalProperties: { type: 'string' } },
+  },
+} as const;
+
 export type CategoryRouteOptions = {
   database: Database;
 };
@@ -61,13 +90,38 @@ export function registerCategoryRoutes(
   // AC-12: one guard for every route here, rather than repeating jwtVerify.
   app.addHook('preHandler', requireAuth);
 
-  app.get('/categories', async (request, reply) => {
+  app.get('/categories', {
+    schema: {
+      tags: ['Categories'],
+      summary: 'List live categories, alphabetically',
+      security: [{ bearerAuth: [] }],
+      response: {
+        200: { type: 'array', items: categoryResponse },
+        401: categoryError,
+      },
+    },
+  }, async (request, reply) => {
     const rows = await listCategories(database.pool, authenticatedUserId(request));
 
     return reply.code(200).send(rows.map(toCategory));
   });
 
-  app.post('/categories', async (request, reply) => {
+  app.post('/categories', {
+    schema: {
+      tags: ['Categories'],
+      summary: 'Create a category',
+      description:
+        'Names are unique per account, case-insensitively, among live categories only. '
+        + 'A name whose only match is a deleted category is accepted.',
+      security: [{ bearerAuth: [] }],
+      response: {
+        201: categoryResponse,
+        400: categoryValidationError,
+        401: categoryError,
+        409: categoryError,
+      },
+    },
+  }, async (request, reply) => {
     const parsed = nameSchema.safeParse(request.body);
 
     if (!parsed.success) {
@@ -92,7 +146,23 @@ export function registerCategoryRoutes(
     return reply.code(201).send(toCategory(outcome.category));
   });
 
-  app.patch('/categories/:id', async (request, reply) => {
+  app.patch('/categories/:id', {
+    schema: {
+      tags: ['Categories'],
+      summary: 'Rename a category',
+      description:
+        'A category belonging to another account answers 404, identically to one that '
+        + 'does not exist. Renaming to its own name in a different case is allowed.',
+      security: [{ bearerAuth: [] }],
+      response: {
+        200: categoryResponse,
+        400: categoryValidationError,
+        401: categoryError,
+        404: categoryError,
+        409: categoryError,
+      },
+    },
+  }, async (request, reply) => {
     const params = paramsSchema.safeParse(request.params);
 
     // A malformed uuid cannot name a real category, so it gets the same 404 as
@@ -127,7 +197,16 @@ export function registerCategoryRoutes(
     return reply.code(200).send(toCategory(outcome.category));
   });
 
-  app.delete('/categories/:id', async (request, reply) => {
+  app.delete('/categories/:id', {
+    schema: {
+      tags: ['Categories'],
+      summary: 'Soft delete a category',
+      description:
+        'The row is kept forever so historical expenses stay labelled, and its name '
+        + 'becomes available again. Deleting twice answers 404.',
+      security: [{ bearerAuth: [] }],
+    },
+  }, async (request, reply) => {
     const params = paramsSchema.safeParse(request.params);
 
     if (!params.success) {

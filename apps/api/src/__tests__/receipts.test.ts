@@ -259,6 +259,24 @@ describe('POST /receipts', () => {
     expect(await storedFiles(userId)).toHaveLength(1);
   });
 
+  /**
+   * EXP-11: the only path that produces a null `originalFilename`, and the
+   * reason its schema needs a nullable type at all. A response schema strips
+   * whatever it does not describe, so without this the null could be silently
+   * dropped or coerced and nothing would notice.
+   */
+  it('AC-2: an empty filename is stored and returned as null', async () => {
+    const { token } = await account('nofilename@example.com');
+
+    const created = await upload(token, jpeg(), '');
+
+    expect(created.statusCode).toBe(201);
+    expect((created.json() as { originalFilename: unknown }).originalFilename).toBeNull();
+
+    const [listed] = (await list(token)).json() as { originalFilename: unknown }[];
+    expect(listed!.originalFilename).toBeNull();
+  });
+
   it('AC-2, AC-3: accepts all four formats', async () => {
     const { token, userId } = await account('formats@example.com');
 

@@ -118,7 +118,19 @@ export function registerResetPasswordRoutes(
    * verified account, and a malformed body. Anything else turns this into the
    * account-enumeration oracle that EXP-7 removed from login.
    */
-  app.post('/auth/forgot-password', async (request, reply) => {
+  app.post('/auth/forgot-password', {
+    schema: {
+      tags: ['Auth'],
+      summary: 'Request a password reset link',
+      description:
+        'Always answers the same 202 — for a registered address, an unregistered one, and '
+        + 'a malformed body alike. Any other shape would make this an account-enumeration '
+        + 'oracle. Throttled to one mail a minute, independently of verification mail.',
+      response: {
+        202: { type: 'object', properties: { message: { type: 'string' } } },
+      },
+    },
+  }, async (request, reply) => {
     const parsed = forgotSchema.safeParse(request.body);
 
     // Even a malformed body gets the same 202: reporting a validation error
@@ -136,7 +148,16 @@ export function registerResetPasswordRoutes(
    * AC-6. Opened by a human in a browser from a link in an email, so both
    * outcomes are HTML pages rather than JSON.
    */
-  app.get('/auth/reset-password', async (request, reply) => {
+  app.get('/auth/reset-password', {
+    schema: {
+      tags: ['Auth'],
+      summary: 'The password reset form',
+      description:
+        'Returns an HTML form when the link is live, and an HTML error page otherwise. '
+        + 'Links expire after 1 hour and can be redeemed once. No response schema is '
+        + 'declared: these replies are HTML.',
+    },
+  }, async (request, reply) => {
     const parsed = tokenQuerySchema.safeParse(request.query);
 
     if (!parsed.success) {
@@ -156,7 +177,17 @@ export function registerResetPasswordRoutes(
    * AC-7 to AC-9 and AC-14. Submitted by the form above as
    * `application/x-www-form-urlencoded`.
    */
-  app.post('/auth/reset-password', async (request, reply) => {
+  app.post('/auth/reset-password', {
+    schema: {
+      tags: ['Auth'],
+      summary: 'Submit a new password',
+      description:
+        'Submitted by the form above as application/x-www-form-urlencoded. Sets the '
+        + 'password, revokes every session, and confirms the email address. A rejected '
+        + 'password re-renders the form without spending the link. All replies are HTML.',
+      consumes: ['application/x-www-form-urlencoded'],
+    },
+  }, async (request, reply) => {
     const parsed = submitSchema.safeParse(request.body);
 
     // No usable token means there is no form to send back to — the user would

@@ -60,6 +60,29 @@ function safeFilename(value: string | undefined): string | null {
   return trimmed === '' ? null : trimmed.slice(0, MAX_FILENAME_LENGTH);
 }
 
+/**
+ * EXP-11. Documentation only — no `body`, `querystring`, or `params` schema,
+ * for the reasons recorded in `categories.ts`. The upload body is multipart and
+ * is described in prose rather than by a schema, and the file endpoint declares
+ * no response schema at all because it streams bytes, not JSON.
+ */
+const receiptResponse = {
+  type: 'object',
+  properties: {
+    id: { type: 'string', format: 'uuid' },
+    contentType: { type: 'string' },
+    byteSize: { type: 'number' },
+    // Nullable when the client sent no filename; a bare 'string' would strip it.
+    originalFilename: { type: ['string', 'null'] },
+    createdAt: { type: 'string', format: 'date-time' },
+  },
+} as const;
+
+const receiptError = {
+  type: 'object',
+  properties: { error: { type: 'string' } },
+} as const;
+
 export type ReceiptRouteOptions = {
   config: Config;
   database: Database;
@@ -72,7 +95,17 @@ export function registerReceiptRoutes(
   // AC-12: the same guard the category routes use, unchanged (NG-9).
   app.addHook('preHandler', requireAuth);
 
-  app.get('/receipts', async (request, reply) => {
+  app.get('/receipts', {
+    schema: {
+      tags: ['Receipts'],
+      summary: 'List live receipts, newest first',
+      security: [{ bearerAuth: [] }],
+      response: {
+        200: { type: 'array', items: receiptResponse },
+        401: receiptError,
+      },
+    },
+  }, async (request, reply) => {
     const rows = await listReceipts(database.pool, authenticatedUserId(request));
 
     return reply.code(200).send(rows.map(toReceipt));
@@ -83,7 +116,30 @@ export function registerReceiptRoutes(
   // must not be throttled. 60 an hour is far above filing receipts by hand and
   // far below what a runaway client or a stolen token could write to a home
   // disk unchecked.
-  app.post('/receipts', { config: { rateLimit: UPLOAD_RATE_LIMIT } }, async (request, reply) => {
+  app.post('/receipts', {
+    config: { rateLimit: UPLOAD_RATE_LIMIT },
+    schema: {
+      tags: ['Receipts'],
+      summary: 'Upload a receipt image',
+      description:
+        'multipart/form-data with a single file part. The type is determined by reading '
+        + "the file's own signature bytes, not the declared Content-Type: JPEG, PNG, WebP "
+        + 'or HEIC only. Uploading bytes already held answers 200 with the existing '
+        + 'receipt rather than creating a duplicate. Limited to 60 uploads an hour per '
+        + 'account.',
+      consumes: ['multipart/form-data'],
+      security: [{ bearerAuth: [] }],
+      response: {
+        200: receiptResponse,
+        201: receiptResponse,
+        400: receiptError,
+        401: receiptError,
+        409: receiptError,
+        413: receiptError,
+        415: receiptError,
+      },
+    },
+  }, async (request, reply) => {
     const userId = authenticatedUserId(request);
 
     const part = await request.file();
@@ -151,7 +207,19 @@ export function registerReceiptRoutes(
     return reply.code(201).send(toReceipt(outcome.receipt));
   });
 
-  app.get('/receipts/:id/file', async (request, reply) => {
+  app.get('/receipts/:id/file', {
+    schema: {
+      tags: ['Receipts'],
+      summary: 'Download the image bytes',
+      description:
+        'Streams the file with its stored content type and `Cache-Control: private, '
+        + 'no-store`. Answers 404 for an unknown receipt or one belonging to another '
+        + 'account, and 503 when the row is live but its bytes are missing from storage. '
+        + 'No response schema is declared here: the body is binary, and a schema would '
+        + 'serialise it as JSON.',
+      security: [{ bearerAuth: [] }],
+    },
+  }, async (request, reply) => {
     const params = paramsSchema.safeParse(request.params);
 
     if (!params.success) {
@@ -204,7 +272,16 @@ export function registerReceiptRoutes(
       .send(createReadStream(filePath(config.RECEIPTS_PATH, userId, row.sha256)));
   });
 
-  app.delete('/receipts/:id', async (request, reply) => {
+  app.delete('/receipts/:id', {
+    schema: {
+      tags: ['Receipts'],
+      summary: 'Soft delete a receipt',
+      description:
+        'The row is marked deleted and the file is never removed from disk. Deleting '
+        + 'twice answers 404.',
+      security: [{ bearerAuth: [] }],
+    },
+  }, async (request, reply) => {
     const params = paramsSchema.safeParse(request.params);
 
     if (!params.success) {
