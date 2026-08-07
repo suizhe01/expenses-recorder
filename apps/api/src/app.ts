@@ -1,12 +1,14 @@
 import Fastify, { type FastifyInstance } from 'fastify';
 import fastifyJwt from '@fastify/jwt';
 import fastifyRateLimit from '@fastify/rate-limit';
+import fastifyFormbody from '@fastify/formbody';
 import { createRequire } from 'node:module';
 import type { Config } from './config.js';
 import type { Database } from './db.js';
 import { registerHealthRoute } from './routes/health.js';
 import { registerAuthRoutes } from './routes/auth.js';
 import { registerVerifyRoute } from './routes/verify.js';
+import { registerResetPasswordRoutes } from './routes/reset-password.js';
 import { createConsoleTransport, type EmailTransport } from './email/transport.js';
 import { createResendTransport } from './email/resend.js';
 
@@ -63,8 +65,21 @@ export function buildApp({
       timeWindow: '1 minute',
     });
 
+    // EXP-10: the reset form posts application/x-www-form-urlencoded, which
+    // Fastify has no parser for out of the box. Registered on this scope only,
+    // so the JSON endpoints elsewhere are unaffected.
+    await scope.register(fastifyFormbody);
+
     registerAuthRoutes(scope, { config, database, emailTransport: transport });
     registerVerifyRoute(scope, { database });
+
+    // EXP-10 NG-4: inside the same scope, so the reset routes inherit the
+    // 10/min limit above rather than introducing a second limiter.
+    registerResetPasswordRoutes(scope, {
+      config,
+      database,
+      emailTransport: transport,
+    });
   });
 
   return app;

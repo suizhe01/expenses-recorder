@@ -29,6 +29,9 @@ function recordingTransport(): EmailTransport {
     sendVerificationEmail: vi.fn(async (message: VerificationEmail) => {
       sent.push(message);
     }),
+    // EXP-10 added this to the interface. These tests never reset a password,
+    // so it exists only to satisfy the type.
+    sendPasswordResetEmail: vi.fn(async () => {}),
   };
 }
 
@@ -263,6 +266,7 @@ describe('email dispatch never blocks a response', () => {
           new Promise<void>(() => {
             hangingCalls += 1;
           }),
+        sendPasswordResetEmail: () => new Promise<void>(() => {}),
       },
     });
     await hung.ready();
@@ -308,6 +312,7 @@ describe('email dispatch never blocks a response', () => {
       emailTransport: {
         name: 'rejecting',
         sendVerificationEmail: () => Promise.reject(new Error('provider down')),
+        sendPasswordResetEmail: () => Promise.reject(new Error('provider down')),
       },
     });
     await rejecting.ready();
