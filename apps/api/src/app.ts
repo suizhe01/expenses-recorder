@@ -2,6 +2,7 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import fastifyJwt from '@fastify/jwt';
 import fastifyRateLimit from '@fastify/rate-limit';
 import fastifyFormbody from '@fastify/formbody';
+import fastifyMultipart from '@fastify/multipart';
 import { createRequire } from 'node:module';
 import type { Config } from './config.js';
 import type { Database } from './db.js';
@@ -10,6 +11,7 @@ import { registerAuthRoutes } from './routes/auth.js';
 import { registerVerifyRoute } from './routes/verify.js';
 import { registerResetPasswordRoutes } from './routes/reset-password.js';
 import { registerCategoryRoutes } from './routes/categories.js';
+import { registerReceiptRoutes } from './routes/receipts.js';
 import { createConsoleTransport, type EmailTransport } from './email/transport.js';
 import { createResendTransport } from './email/resend.js';
 
@@ -67,6 +69,34 @@ export function buildApp({
   // /health, which must stay unauthenticated.
   app.register(async (scope) => {
     registerCategoryRoutes(scope, { database });
+  });
+
+  // EXP-13: receipts get their own scope for the same reason — the guard is a
+  // preHandler and must not escape. Unlike categories, a limiter is registered
+  // here with `global: false`, so it applies only to the upload route that
+  // opts in (AC-13). An unbounded 10MB write is a different risk from an
+  // unbounded row insert.
+  app.register(async (scope) => {
+    await scope.register(fastifyRateLimit, {
+      global: false,
+      // AC-13 counts per ACCOUNT. The plugin's default key is the client IP,
+      // which is wrong here in three ways, the last of them serious: one
+      // account on two networks would get double the budget, two accounts
+      // behind one NAT would share a single budget, and behind the Cloudflare
+      // Tunnel of the deploy issue every request carries the tunnel's address
+      // — collapsing the limit into one global bucket for the whole system.
+      keyGenerator: (request) => request.authenticatedUserId ?? request.ip,
+      // The default `onRequest` runs before any preHandler, so the id would
+      // not be set yet. A route-level preHandler runs after the instance-level
+      // preHandler that `requireAuth` is registered as, which is what makes
+      // the key above available.
+      hook: 'preHandler',
+    });
+    await scope.register(fastifyMultipart, {
+      limits: { files: 1, fileSize: config.MAX_UPLOAD_BYTES },
+    });
+
+    registerReceiptRoutes(scope, { config, database });
   });
 
   // AC-11: the rate limiter is registered inside an encapsulated scope so it

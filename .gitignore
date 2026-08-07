@@ -2,4 +2,7 @@ node_modules/
 .env
 .DS_Store
 dist/
+# Receipt images written by a local (non-compose) run. This repository is
+# public — an uploaded receipt must never be committed.
+data/
 *.tsbuildinfo
