@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { Database } from '../db.js';
 import { authenticatedUserId, requireAuth } from '../auth/guard.js';
+import { fieldErrors } from '../validation.js';
 import {
   createCategory,
   listCategories,
@@ -44,11 +45,6 @@ const NOT_FOUND = { error: 'Category not found' } as const;
 /** AC-7 and AC-9. */
 const NAME_TAKEN = { error: 'A category with that name already exists' } as const;
 
-function fieldErrors(error: z.ZodError): Record<string, string> {
-  return Object.fromEntries(
-    error.issues.map((issue) => [issue.path.join('.'), issue.message]),
-  );
-}
 
 /**
  * EXP-11. Documentation only. No `body`, `querystring`, or **`params`** schema

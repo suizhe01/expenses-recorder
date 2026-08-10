@@ -115,6 +115,37 @@ async function tokenCount(): Promise<number> {
   return Number(rows[0]?.count);
 }
 
+/**
+ * EXP-19 NG-2. `GET /expenses` rejects unknown query parameters, and this route
+ * deliberately does not.
+ *
+ * Its URL arrives by email. Mail clients and link trackers append things —
+ * `utm_source`, `fbclid` — and if this parser were made strict "for
+ * consistency", every one of those would turn a valid verification link into
+ * "link no longer valid" for a user who did nothing wrong. This test is the
+ * guard on that decision.
+ */
+describe('EXP-19 NG-2: an emailed link survives appended tracking parameters', () => {
+  it('verifies with utm_source and fbclid alongside the token', async () => {
+    await unverifiedUser('tracked@example.com');
+    await resend('tracked@example.com');
+    const token = tokenFromUrl(sent[0]!.verificationUrl);
+
+    const response = await app.inject({
+      method: 'GET',
+      url: `/auth/verify?token=${token}&utm_source=mail&fbclid=abc123`,
+    });
+
+    expect(response.statusCode).toBe(200);
+
+    const { rows } = await database.pool.query<{ email_verified: boolean }>(
+      'SELECT email_verified FROM users WHERE email = $1',
+      ['tracked@example.com'],
+    );
+    expect(rows[0]!.email_verified).toBe(true);
+  });
+});
+
 describe('POST /auth/resend-verification', () => {
   // AC-3
   it('returns an identical 202 for unregistered, unverified, and verified addresses', async () => {

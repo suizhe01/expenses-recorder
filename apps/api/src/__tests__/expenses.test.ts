@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -936,6 +936,198 @@ describe('EXP-18: GET /expenses filters', () => {
     expect(code).toContain('purchased_on <=');
     expect(code).toContain('::date');
     expect(code).not.toMatch(/new Date\(/);
+  });
+});
+
+/**
+ * EXP-19 — validation errors that name the actual problem, and query parameters
+ * that cannot be silently dropped.
+ *
+ * Every assertion here is on the exact message string. The existing tests passed
+ * against the wrong messages because they only checked that the key was present,
+ * which is precisely how these defects survived.
+ */
+describe('EXP-19: validation reporting', () => {
+  function listWith(token: string, query: string) {
+    return app.inject({
+      method: 'GET',
+      url: `/expenses?${query}`,
+      headers: auth(token),
+    });
+  }
+
+  it('AC-1: no route file declares its own fieldErrors', async () => {
+    const directory = new URL('../routes/', import.meta.url);
+    const files = await readdir(directory);
+
+    expect(files.length).toBeGreaterThan(0);
+
+    for (const file of files) {
+      const source = await readFile(new URL(file, directory), 'utf8');
+
+      expect(source, `${file} declares a local fieldErrors`).not.toMatch(
+        /function fieldErrors/,
+      );
+    }
+  });
+
+  it('AC-3: a filter that is not a date names the format, not the future', async () => {
+    const { token } = await account('exp19-format@example.com');
+
+    const response = await listWith(token, 'from=yesterday');
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({
+      error: 'Validation failed',
+      fields: { from: 'must be a date as YYYY-MM-DD' },
+    });
+  });
+
+  it('AC-3: POST reports the same message for a malformed purchasedOn', async () => {
+    const { token } = await account('exp19-post@example.com');
+
+    const response = await create(
+      token,
+      await minimal(token, { purchasedOn: 'yesterday' }),
+    );
+
+    expect(response.statusCode).toBe(400);
+    expect(fields(response)).toEqual({
+      purchasedOn: 'must be a date as YYYY-MM-DD',
+    });
+  });
+
+  /**
+   * AC-4. `2026-13-01` matches the YYYY-MM-DD shape, so the format check passes
+   * and the calendar check is the first real failure. Before this change the
+   * cross-field range issue arrived last and overwrote it, blaming the range for
+   * a month that does not exist.
+   */
+  it('AC-4: each bound names its own defect', async () => {
+    const { token } = await account('exp19-both@example.com');
+
+    const response = await listWith(token, 'from=2026-13-01&to=2026-07-01');
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({
+      error: 'Validation failed',
+      fields: {
+        from: 'must be a real calendar date',
+        to: 'from must not be later than to',
+      },
+    });
+  });
+
+  it('AC-5: a genuinely backwards range still blames the range on both bounds', async () => {
+    const { token } = await account('exp19-range@example.com');
+
+    const response = await listWith(token, 'from=2026-08-01&to=2026-07-01');
+
+    expect(response.statusCode).toBe(400);
+    expect(fields(response)).toEqual({
+      from: 'from must not be later than to',
+      to: 'from must not be later than to',
+    });
+  });
+
+  it('AC-6: an unrecognised parameter is refused and names itself', async () => {
+    const { token } = await account('exp19-unknown@example.com');
+    await anExpense(token);
+
+    const response = await listWith(token, 'catgeoryId=whatever');
+
+    // Before this change: 200 with every expense, indistinguishable from a
+    // successful narrow query.
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({
+      error: 'Validation failed',
+      fields: { catgeoryId: 'is not a recognised query parameter' },
+    });
+  });
+
+  it('AC-6: bracket syntax, several unknowns, and unknowns beside valid filters', async () => {
+    const { token } = await account('exp19-unknown2@example.com');
+    const categoryId = await categoryNamed(token, 'Food');
+
+    const bracket = await listWith(token, `categoryId[]=${categoryId}`);
+    expect(bracket.statusCode).toBe(400);
+    expect(fields(bracket)).toEqual({
+      'categoryId[]': 'is not a recognised query parameter',
+    });
+
+    const several = await listWith(token, 'alpha=1&beta=2');
+    expect(several.statusCode).toBe(400);
+    expect(fields(several)).toEqual({
+      alpha: 'is not a recognised query parameter',
+      beta: 'is not a recognised query parameter',
+    });
+
+    // A valid filter alongside an unknown one is still refused, rather than the
+    // unknown being quietly dropped.
+    const mixed = await listWith(token, 'from=2026-07-01&nonsense=x');
+    expect(mixed.statusCode).toBe(400);
+    expect(fields(mixed)).toEqual({
+      nonsense: 'is not a recognised query parameter',
+    });
+  });
+
+  it('AC-6: every documented parameter is still accepted', async () => {
+    const { token } = await account('exp19-accepted@example.com');
+    const categoryId = await categoryNamed(token, 'Food');
+
+    const response = await listWith(
+      token,
+      `from=2026-01-01&to=2026-08-01&categoryId=${categoryId}&hasReceipt=false`,
+    );
+
+    expect(response.statusCode).toBe(200);
+  });
+
+  it('AC-7: a missing or non-object body is keyed body, not an empty string', async () => {
+    const { token } = await account('exp19-body@example.com');
+    const expense = await anExpense(token);
+
+    const missing = await app.inject({
+      method: 'PATCH',
+      url: `/expenses/${expense.id}`,
+      headers: auth(token),
+    });
+    expect(missing.statusCode).toBe(400);
+    expect(missing.json()).toEqual({
+      error: 'Validation failed',
+      fields: { body: 'must be a JSON object' },
+    });
+
+    const notAnObject = await app.inject({
+      method: 'PATCH',
+      url: `/expenses/${expense.id}`,
+      headers: { ...auth(token), 'content-type': 'application/json' },
+      payload: '"hello"',
+    });
+    expect(notAnObject.statusCode).toBe(400);
+    expect(notAnObject.json()).toEqual({
+      error: 'Validation failed',
+      fields: { body: 'must be a JSON object' },
+    });
+  });
+
+  it('AC-8: valid requests are untouched', async () => {
+    const { token } = await account('exp19-valid@example.com');
+    const created = await anExpense(token, { purchasedOn: '2026-07-15' });
+
+    expect((await listWith(token, 'from=2026-07-01&to=2026-07-31')).statusCode).toBe(200);
+    expect((await fetchOne(token, created.id)).statusCode).toBe(200);
+    expect(
+      (await patch(token, created.id, { totalCents: 999 })).statusCode,
+    ).toBe(200);
+
+    // AC-4 of EXP-18 still answers 422, not 400, for a bad reference.
+    const badReference = await create(
+      token,
+      await minimal(token, { categoryId: UNKNOWN_ID }),
+    );
+    expect(badReference.statusCode).toBe(422);
+    expect(badReference.json()).toEqual({ error: 'Category not found' });
   });
 });
 

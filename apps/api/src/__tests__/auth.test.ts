@@ -128,6 +128,28 @@ describe('POST /auth/register', () => {
   });
 
   // AC-4
+  /**
+   * EXP-19 AC-9. Register's fields carry a single check each, so extracting
+   * `fieldErrors` and switching it to first-issue-wins must leave this response
+   * byte-identical. Asserted on the whole body rather than the key alone —
+   * checking only the key is what let a wrong message survive elsewhere.
+   */
+  it('AC-9: names both fields with unchanged messages after the shared extraction', async () => {
+    const shortPassword = await register('exp19a@x.com', 'short');
+    expect(shortPassword.statusCode).toBe(400);
+    expect(shortPassword.json()).toEqual({
+      error: 'Validation failed',
+      fields: { password: 'must be at least 12 characters' },
+    });
+
+    const badEmail = await register('not-an-email', 'correcthorsebattery');
+    expect(badEmail.statusCode).toBe(400);
+    expect(badEmail.json()).toEqual({
+      error: 'Validation failed',
+      fields: { email: 'must be a valid email address' },
+    });
+  });
+
   it('rejects a password shorter than 12 characters, naming the field', async () => {
     const response = await register('short@x.com', 'short');
 
