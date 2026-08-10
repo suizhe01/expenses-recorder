@@ -68,13 +68,14 @@ describe('the OpenAPI document', () => {
       '/receipts/{id}/file',
       '/expenses',
       '/expenses/{id}',
+      '/expenses/export.csv',
     ]) {
       expect(paths).toContain(expected);
     }
   });
 
   /** EXP-16 AC-21. The tag has to be declared, not merely referenced by a route. */
-  it('AC-1: declares the Expenses tag and puts all five routes under it', () => {
+  it('AC-1: declares the Expenses tag and puts every expense route under it', () => {
     const doc = app.swagger() as unknown as {
       tags?: { name: string }[];
       paths: Record<string, Record<string, { tags?: string[] }>>;
@@ -88,9 +89,31 @@ describe('the OpenAPI document', () => {
       ['/expenses/{id}', 'get'],
       ['/expenses/{id}', 'patch'],
       ['/expenses/{id}', 'delete'],
+      // EXP-20 AC-17.
+      ['/expenses/export.csv', 'get'],
     ] as const) {
       expect(doc.paths[path]?.[method]?.tags, `${method} ${path}`).toContain('Expenses');
     }
+  });
+
+  /**
+   * EXP-20 AC-15. A Fastify response schema is an allowlist applied by the
+   * serialiser, so declaring one for the export's 200 would hand a streamed CSV
+   * to a JSON serialiser. The 4xx schemas must stay — those responses really are
+   * JSON — which is why this asserts on the 200 specifically rather than on the
+   * absence of `response` altogether.
+   */
+  it('AC-15: the CSV export declares no 200 response schema', () => {
+    const doc = app.swagger() as unknown as {
+      paths: Record<string, Record<string, { responses?: Record<string, unknown> }>>;
+    };
+    const responses = doc.paths['/expenses/export.csv']?.get?.responses ?? {};
+
+    expect(Object.keys(responses)).not.toContain('200');
+    // The error shapes are still documented.
+    expect(Object.keys(responses)).toEqual(
+      expect.arrayContaining(['400', '401', '422']),
+    );
   });
 
   it('AC-1: is a valid OpenAPI 3 document', () => {

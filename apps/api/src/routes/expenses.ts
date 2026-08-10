@@ -1,6 +1,9 @@
 import type { FastifyInstance } from 'fastify';
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import { z } from 'zod';
 import type { Database } from '../db.js';
+import { BOM, centsCell, csvRow, plainCell, textCell, timestampCell } from '../csv.js';
 import { authenticatedUserId, requireAuth } from '../auth/guard.js';
 import {
   findLiveCategoryById,
@@ -12,10 +15,13 @@ import {
   findExpenseById,
   insertExpense,
   listExpenses,
+  listExpensePage,
   softDeleteExpense,
   toExpense,
   updateExpense,
+  type ExpenseCursor,
   type ExpenseInput,
+  type ExpensePageRow,
 } from '../expenses/expenses.js';
 
 /**
@@ -228,6 +234,74 @@ const querySchema = z
 
 
 /**
+ * EXP-20 AC-4. The export's columns, in order.
+ *
+ * Human-readable rather than the API's field names: this file is opened by a
+ * person or handed to an accountant, where `Purchase Date` beats `purchasedOn`.
+ * The money columns drop the `Cents` suffix because AC-5 renders them as
+ * decimals — a column headed `Total Cents` holding `149.30` would be a lie.
+ */
+const EXPORT_HEADER = [
+  'ID',
+  'Purchase Date',
+  'Purchase Time',
+  'Category',
+  'Category ID',
+  'Merchant',
+  'Merchant Tax ID',
+  'Receipt No',
+  'Total',
+  'Subtotal',
+  'Tax',
+  'Rounding',
+  'Currency',
+  'Payment Method',
+  'Note',
+  'Receipt ID',
+  'Created At',
+  'Updated At',
+];
+
+/**
+ * EXP-20 AC-5, AC-6, AC-7, AC-10. One row, in `EXPORT_HEADER`'s order.
+ *
+ * Which cell helper each column gets is the security decision here, not a
+ * detail: `textCell` carries the formula guard and is used for exactly the
+ * columns whose contents a user typed. Ids, dates and amounts this codebase
+ * generated go through `plainCell` and `centsCell`, so a negative rounding
+ * stays a number a spreadsheet can sum.
+ */
+function exportCells(row: ExpensePageRow): string[] {
+  return [
+    plainCell(row.id),
+    plainCell(row.purchased_on),
+    plainCell(row.purchased_at_time),
+    textCell(row.category_name),
+    plainCell(row.category_id),
+    textCell(row.merchant_name),
+    textCell(row.merchant_tax_id),
+    textCell(row.receipt_number),
+    centsCell(row.total_cents),
+    centsCell(row.subtotal_cents),
+    centsCell(row.tax_cents),
+    centsCell(row.rounding_cents),
+    textCell(row.currency),
+    textCell(row.payment_method),
+    textCell(row.note),
+    plainCell(row.receipt_id),
+    timestampCell(row.created_at),
+    timestampCell(row.updated_at),
+  ];
+}
+
+/**
+ * AC-13. Rows per round-trip. Large enough that a year of receipts is a couple
+ * of queries, small enough that one batch is never a meaningful amount of
+ * memory.
+ */
+const EXPORT_BATCH_SIZE = 500;
+
+/**
  * EXP-11. Documentation only — no `body`, `querystring`, or `params` schema, for
  * the reasons recorded in `categories.ts`.
  *
@@ -324,6 +398,27 @@ export function registerExpenseRoutes(
     return undefined;
   }
 
+  /**
+   * EXP-18 AC-9, shared with the export by EXP-20 AC-2.
+   *
+   * Checked before the query runs, so filtering by something that cannot match
+   * is reported rather than answered with a plausible empty result. For the
+   * export that matters more than for the list: an empty CSV looks like a
+   * successful export of a period with no spending.
+   */
+  async function unknownCategoryFilter(
+    userId: string,
+    categoryIds: string[] | undefined,
+  ): Promise<boolean> {
+    if (categoryIds === undefined) {
+      return false;
+    }
+
+    const live = await findLiveCategoryIds(database.pool, userId, categoryIds);
+
+    return categoryIds.some((id) => !live.has(id));
+  }
+
   app.get('/expenses', {
     schema: {
       tags: ['Expenses'],
@@ -368,14 +463,8 @@ export function registerExpenseRoutes(
     const userId = authenticatedUserId(request);
     const { from, to, categoryId: categoryIds, hasReceipt } = parsed.data;
 
-    // AC-9. Checked before the list query, so filtering by something that cannot
-    // match is reported rather than answered with a plausible empty array.
-    if (categoryIds !== undefined) {
-      const live = await findLiveCategoryIds(database.pool, userId, categoryIds);
-
-      if (categoryIds.some((id) => !live.has(id))) {
-        return reply.code(422).send(CATEGORY_NOT_FOUND);
-      }
+    if (await unknownCategoryFilter(userId, categoryIds)) {
+      return reply.code(422).send(CATEGORY_NOT_FOUND);
     }
 
     const rows = await listExpenses(database.pool, userId, {
@@ -386,6 +475,142 @@ export function registerExpenseRoutes(
     });
 
     return reply.code(200).send(rows.map(toExpense));
+  });
+
+  /**
+   * EXP-20. The CSV export.
+   *
+   * Registered before `/expenses/:id` for readability only — Fastify's router
+   * prefers a static segment over a parameter regardless of registration order,
+   * which is what stops `export.csv` being read as an expense id (AC-16). A
+   * test pins that rather than trusting it.
+   */
+  app.get('/expenses/export.csv', {
+    schema: {
+      tags: ['Expenses'],
+      summary: 'Export the filtered expenses as a CSV download',
+      // AC-15. Every parameter is prose here for the repo-wide reason: a
+      // `querystring` schema would switch on Fastify request validation and
+      // answer 400 before this handler runs.
+      description:
+        'Streams `text/csv; charset=utf-8` as an attachment. The response is not '
+        + 'JSON and has no response schema — a Fastify response schema is an '
+        + 'allowlist and would strip a streamed body.\n\n'
+        + 'Takes the same four optional filters as `GET /expenses`, with identical '
+        + 'semantics: `from`, `to` (both inclusive), repeatable `categoryId`, and '
+        + '`hasReceipt`. A malformed or unrecognised parameter answers 400 naming '
+        + 'it; an unknown, soft-deleted, or other account\'s `categoryId` answers '
+        + '422.\n\n'
+        + 'Rows run **oldest purchase first**, the reverse of `GET /expenses`, '
+        + 'because a ledger reads forward in time. Columns: ID, Purchase Date, '
+        + 'Purchase Time, Category, Category ID, Merchant, Merchant Tax ID, '
+        + 'Receipt No, Total, Subtotal, Tax, Rounding, Currency, Payment Method, '
+        + 'Note, Receipt ID, Created At, Updated At.\n\n'
+        + 'Amounts are decimal strings with two places rather than integer cents, '
+        + 'so a spreadsheet sums them as money. Timestamps are Malaysian time '
+        + '(UTC+8). The body opens with a UTF-8 BOM so Excel decodes non-Latin '
+        + 'merchant names. No matching expenses still returns 200, with the header '
+        + 'row alone.\n\n'
+        + 'The download is named from the range covered — '
+        + '`expenses-<from>-to-<to>.csv`, where an omitted `from` becomes `start` '
+        + 'and an omitted `to` becomes today.',
+      security: [{ bearerAuth: [] }],
+      response: {
+        // AC-15. Deliberately no 200: this route streams, and naming a 200 schema
+        // here would hand the body to Fastify's serialiser.
+        400: expenseValidationError,
+        401: expenseError,
+        422: expenseError,
+      },
+    },
+  }, async (request, reply) => {
+    const parsed = querySchema.safeParse(request.query);
+
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: 'Validation failed', fields: fieldErrors(parsed.error) });
+    }
+
+    const userId = authenticatedUserId(request);
+    const { from, to, categoryId: categoryIds, hasReceipt } = parsed.data;
+
+    // AC-2. Both 400 and 422 are settled before a single byte is written —
+    // once the stream starts there is no status code left to change.
+    if (await unknownCategoryFilter(userId, categoryIds)) {
+      return reply.code(422).send(CATEGORY_NOT_FOUND);
+    }
+
+    const filters = { from, to, categoryIds, hasReceipt };
+
+    /**
+     * AC-13. One batch in memory at a time, resumed by keyset rather than
+     * OFFSET. Yielding a whole batch as one string keeps the write count down
+     * without holding the export.
+     */
+    async function* records(): AsyncGenerator<string> {
+      yield BOM + csvRow(EXPORT_HEADER);
+
+      let cursor: ExpenseCursor | undefined;
+
+      for (;;) {
+        const batch = await listExpensePage(
+          database.pool,
+          userId,
+          filters,
+          cursor,
+          EXPORT_BATCH_SIZE,
+        );
+
+        if (batch.length === 0) {
+          return;
+        }
+
+        yield batch.map((row) => csvRow(exportCells(row))).join('');
+
+        // A short batch means the last page; one more query would only prove it.
+        if (batch.length < EXPORT_BATCH_SIZE) {
+          return;
+        }
+
+        const last = batch[batch.length - 1] as ExpensePageRow;
+
+        cursor = {
+          purchasedOn: last.purchased_on,
+          createdAt: last.created_at_text,
+          id: last.id,
+        };
+      }
+    }
+
+    // AC-11. Named from the range actually covered, so two exports do not
+    // collide in a downloads folder and each file says what is in it.
+    const filename = `expenses-${from ?? 'start'}-to-${to ?? todayInMalaysia()}.csv`;
+
+    // Taking the socket off Fastify: it must not serialise, append, or
+    // error-handle a body being written a batch at a time. No Content-Length,
+    // because the length is unknown until the last row — the response is
+    // chunked.
+    reply.hijack();
+    reply.raw.writeHead(200, {
+      'content-type': 'text/csv; charset=utf-8',
+      'content-disposition': `attachment; filename="${filename}"`,
+    });
+
+    try {
+      // `pipeline` applies backpressure, so a slow client throttles the queries
+      // rather than filling memory with batches it has not read.
+      await pipeline(Readable.from(records(), { objectMode: false }), reply.raw);
+    } catch (error) {
+      // AC-14. The status line said 200 several batches ago, so there is no way
+      // left to report this in-band. Destroying the socket gives the client a
+      // truncated download it cannot mistake for a complete one — a CSV that
+      // ends cleanly but short is the failure worth preventing, because it looks
+      // exactly like a successful narrow export. The real error goes to the log
+      // only, consistent with the global 5xx handler.
+      request.log.error({ err: error }, 'expense CSV export failed mid-stream');
+      reply.raw.destroy();
+    }
   });
 
   app.post('/expenses', {

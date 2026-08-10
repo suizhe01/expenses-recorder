@@ -154,18 +154,21 @@ export type ExpenseFilters = {
 };
 
 /**
- * AC-11 and AC-1. Live expenses only, newest purchase first. With no filters the
- * query is the one this function has always run.
+ * The WHERE clause every filtered read shares.
+ *
+ * Extracted in EXP-20 so the list and the CSV export cannot drift: an export
+ * that filtered even slightly differently from the list would hand someone a
+ * file that disagrees with the screen it was exported from, and nothing would
+ * say which was right.
  *
  * The user scope and the soft-delete predicate are seeded first and unconditional,
  * so no filter combination can widen the result past one account's live rows —
  * a filter must never become a way around the scope.
  */
-export async function listExpenses(
-  executor: Executor,
+function filtered(
   userId: string,
-  filters: ExpenseFilters = {},
-): Promise<ExpenseRow[]> {
+  filters: ExpenseFilters,
+): { conditions: string[]; parameters: (string | string[])[] } {
   const conditions = ['e.user_id = $1', 'e.deleted_at IS NULL'];
   const parameters: (string | string[])[] = [userId];
 
@@ -196,11 +199,89 @@ export async function listExpenses(
     );
   }
 
+  return { conditions, parameters };
+}
+
+/**
+ * AC-11 and AC-1. Live expenses only, newest purchase first. With no filters the
+ * query is the one this function has always run.
+ */
+export async function listExpenses(
+  executor: Executor,
+  userId: string,
+  filters: ExpenseFilters = {},
+): Promise<ExpenseRow[]> {
+  const { conditions, parameters } = filtered(userId, filters);
+
   const { rows } = await executor.query<ExpenseRow>(
     `SELECT ${PROJECTION}
      ${FROM_EXPENSES}
      WHERE ${conditions.join(' AND ')}
      ORDER BY e.purchased_on DESC, e.created_at DESC, e.id DESC`,
+    parameters,
+  );
+
+  return rows;
+}
+
+/**
+ * EXP-20 AC-13. Where one export batch resumes from.
+ *
+ * `createdAt` is the **text** rendering of the column, not a Date, and that is
+ * load-bearing. Postgres keeps `timestamptz` to microseconds while a JavaScript
+ * Date holds milliseconds, so a cursor that round-tripped through a Date would
+ * be marginally *earlier* than the row it came from — and the next batch would
+ * return that row again. Rows written by one `INSERT ... generate_series` share
+ * a millisecond and differ only in microseconds, so this is reachable, not
+ * theoretical. Round-tripping the text Postgres printed is exact.
+ */
+export type ExpenseCursor = {
+  purchasedOn: string;
+  createdAt: string;
+  id: string;
+};
+
+/** The cursor's own column, alongside the ordinary projection. */
+export type ExpensePageRow = ExpenseRow & { created_at_text: string };
+
+/**
+ * EXP-20 AC-3 and AC-13. One keyset page, **oldest purchase first**.
+ *
+ * The reverse of `listExpenses` on purpose: a ledger reads forward in time, so
+ * the export runs ascending while the list UI runs descending.
+ *
+ * Keyset rather than OFFSET, which would re-scan and re-sort everything already
+ * emitted on every batch — quadratic over a long export — and would skip or
+ * repeat rows if anything were written while it ran. The row-value comparison
+ * `(a, b, c) > (x, y, z)` is evaluated left to right exactly as the ORDER BY
+ * sorts, so the two can only agree.
+ */
+export async function listExpensePage(
+  executor: Executor,
+  userId: string,
+  filters: ExpenseFilters,
+  after: ExpenseCursor | undefined,
+  limit: number,
+): Promise<ExpensePageRow[]> {
+  const { conditions, parameters } = filtered(userId, filters);
+
+  if (after !== undefined) {
+    const base = parameters.length;
+    parameters.push(after.purchasedOn, after.createdAt, after.id);
+    conditions.push(
+      `(e.purchased_on, e.created_at, e.id)
+       > ($${base + 1}::date, $${base + 2}::timestamptz, $${base + 3}::uuid)`,
+    );
+  }
+
+  parameters.push(String(limit));
+
+  const { rows } = await executor.query<ExpensePageRow>(
+    `SELECT ${PROJECTION}, e.created_at::text AS created_at_text
+     ${FROM_EXPENSES}
+     WHERE ${conditions.join(' AND ')}
+     ORDER BY e.purchased_on ASC, e.created_at ASC, e.id ASC
+     LIMIT $${parameters.length}`,
     parameters,
   );
 
