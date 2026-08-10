@@ -4,16 +4,30 @@ Receipt capture and expense archive for a Malaysian individual. Snap a receipt,
 have it read automatically, confirm the extracted fields, keep the original
 image for as long as you might need to produce it.
 
-**Status:** backend only, and complete through receipt extraction. Auth
+**Status:** backend only, and the whole capture-to-record path works. Auth
 (registration, login, refresh with rotation, logout, email verification,
-password reset), category CRUD, receipt upload with on-disk storage, and Gemini
-extraction of the tax-invoice fields all work — extraction is verified against
-real photographs, not only tests. An OpenAPI document is served at `/docs` in
-development.
+password reset), category CRUD, receipt upload with on-disk storage, Gemini
+extraction of the tax-invoice fields, **expense CRUD**, and **filtering the
+expense list** are all merged. Extraction is verified against real photographs,
+not only tests. An OpenAPI document is served at `/docs` in development. No
+mobile app exists.
 
-**Nothing records an expense yet.** There is no `expenses` table, so a receipt
-and its extracted fields have nowhere to be confirmed and kept. That is chain
-item 7 and the next thing to build. No mobile app exists.
+An expense may have zero or one receipt, and a receipt backs at most one *live*
+expense — enforced by a partial unique index, so deleting an expense frees its
+receipt to be confirmed again. The tax-invoice fields are **copied** at confirm
+rather than read back through `receipt_extractions`, so an expense is a
+standalone record and editing it never disturbs what the model actually read.
+
+**Next is the export chain.** `GET /expenses` already takes `from`, `to`,
+`categoryId` (repeatable) and `hasReceipt`; the streaming CSV and the streaming
+ZIP of images are the two issues that consume it. Project memory holds the
+agreed order and the decisions already settled for both.
+
+**The `GEMINI_API_KEY` in `.env` stopped working on 2026-08-10** (HTTP 401 —
+rotated or expired, not leaked; `.env` has never been committed). Until a new key
+is issued every upload records a `failed` attempt and still returns 201 with the
+receipt stored, which is the guarantee below working as designed rather than a
+bug.
 
 ## How work happens here
 
@@ -97,6 +111,16 @@ simplify these without understanding them:
   through untouched so the rate limiter keeps its `Retry-After`. This exists
   because an ENOENT once returned the absolute storage path, the owner's id and
   a content hash to the client.
+- **A receipt attached to a live expense cannot be deleted** — 409, and
+  ownership is settled *before* the attachment check, so another account's
+  receipt still answers 404 rather than confirming it exists.
+- **Query parsing on the two emailed-link routes is deliberately tolerant.**
+  `GET /expenses` is `.strict()` and refuses an unknown parameter, because a
+  misspelled filter that returns everything looks exactly like a successful
+  narrow export. `/auth/verify` and `/auth/reset-password` are **not** strict:
+  their URLs arrive by email, and a mail client appending `utm_source` would turn
+  a valid link into "link no longer valid". Making them strict for consistency is
+  a real temptation; two tests fail if you do.
 
 ## Stack and conventions
 
@@ -114,7 +138,21 @@ image needs no build toolchain.
 - **Never declare `body`, `querystring`, or `params` schemas.** Any of them
   switches on Fastify request validation, which answers 400 before the handler
   runs and would undo login's uniform 401, resend-verification's fixed 202,
-  logout's idempotent 204, and the HTML error pages. A test greps for all three
+  logout's idempotent 204, and the HTML error pages. A test greps for all three.
+  Query parameters are therefore documented in the route's `description` prose;
+  structured OpenAPI `parameters` would need a Swagger plugin `transform`, which
+  is still unbuilt
+- **Validation errors go through one helper**, `src/validation.ts` — outside
+  `src/routes/` on purpose, so the grep test above keeps scanning route files
+  only. It keeps the **first** zod issue per field, not the last: zod carries on
+  after a failed check, so a field accumulates several issues and the earliest is
+  the most specific. Taking the last once reported a malformed date as a future
+  one
+- **Read a `date` column with `to_char(col, 'YYYY-MM-DD')` in SQL, never through
+  a JavaScript `Date`.** `pg` parses a `date` into a Date at *local* midnight, so
+  east of UTC `toISOString().slice(0, 10)` reports the day before — measured, and
+  it shipped once. Both `purchased_on` columns do this, and a structural test
+  enforces it. `timestamptz` is unaffected; a full `toISOString()` there is right
 - Config is one zod schema with fail-fast validation naming the offending
   variable. Add new variables there, plus `.env.example`, `docker-compose.yml`,
   the CI workflow, and the README table
@@ -122,7 +160,16 @@ image needs no build toolchain.
   `Can't determine timestamp` on every run — cosmetic, ignore it
 - Tests run **sequentially** (`fileParallelism: false`): the integration suites
   share one database and each truncates
+- Tests also run **east of UTC** — `vitest.config.ts` pins
+  `env: { TZ: 'Asia/Kuala_Lumpur' }`. CI is otherwise UTC, where a date-only bug
+  and a correct implementation give the same answer, which made CI structurally
+  blind to the class of bug above. The container pins `TZ=UTC` so the two are
+  deliberately different
 - Integration tests use a real Postgres. CI migrates *before* running them
+- The `auth.test.ts` session tests do real scrypt work and take
+  `SELECT … FOR UPDATE` locks, so they are the first to fail under machine load.
+  A red auth suite with 4–20s test timings is usually contention — re-run before
+  investigating
 
 ```bash
 cp .env.example .env && docker compose up -d --build
