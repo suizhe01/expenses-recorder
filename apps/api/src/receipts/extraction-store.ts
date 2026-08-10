@@ -16,7 +16,11 @@ export type ExtractionRow = {
   merchant_name: string | null;
   merchant_tax_id: string | null;
   receipt_number: string | null;
-  purchased_on: Date | null;
+  /**
+   * EXP-17. Read as text, never as a Date — see PUBLIC_COLUMNS. A `time` column
+   * like `purchased_at_time` already arrives as a string and needs no such care.
+   */
+  purchased_on: string | null;
   purchased_at_time: string | null;
   subtotal_cents: number | null;
   tax_cents: number | null;
@@ -61,10 +65,7 @@ export function toExtraction(row: ExtractionRow): Extraction {
     merchantName: row.merchant_name,
     merchantTaxId: row.merchant_tax_id,
     receiptNumber: row.receipt_number,
-    purchasedOn:
-      row.purchased_on === null
-        ? null
-        : row.purchased_on.toISOString().slice(0, 10),
+    purchasedOn: row.purchased_on,
     purchasedAtTime: row.purchased_at_time,
     subtotalCents: row.subtotal_cents,
     taxCents: row.tax_cents,
@@ -76,9 +77,23 @@ export function toExtraction(row: ExtractionRow): Extraction {
   };
 }
 
-/** Everything the API may return. Never selects tokens or cost (AC-9). */
+/**
+ * Everything the API may return. Never selects tokens or cost (EXP-15 AC-9).
+ *
+ * EXP-17: `purchased_on` is converted to text **in SQL** rather than through the
+ * Date `pg` would otherwise build. `pg` parses a `date` into a Date at *local*
+ * midnight, so on a UTC+8 machine `2026-08-08` becomes `2026-08-07T16:00:00Z`
+ * and the obvious `toISOString().slice(0, 10)` reported the day before — which
+ * is exactly the bug this replaced. Measured, not theorised. `to_char` contains
+ * no timezone at all and gives the same answer wherever this runs.
+ *
+ * `expenses/expenses.ts` does the same thing for the same reason. These are the
+ * only two `date` columns in the schema; every other timestamp is `timestamptz`,
+ * where a full `toISOString()` is correct.
+ */
 const PUBLIC_COLUMNS = `id, receipt_id, status, model, is_receipt, confidence,
-  merchant_name, merchant_tax_id, receipt_number, purchased_on,
+  merchant_name, merchant_tax_id, receipt_number,
+  to_char(purchased_on, 'YYYY-MM-DD') AS purchased_on,
   purchased_at_time, subtotal_cents, tax_cents, rounding_cents, total_cents,
   currency, payment_method, created_at`;
 
