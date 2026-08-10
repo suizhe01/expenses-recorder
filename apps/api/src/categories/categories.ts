@@ -80,6 +80,30 @@ export async function listCategories(
   return rows;
 }
 
+/**
+ * EXP-16 AC-9. One live category of this user's, for validating the
+ * `categoryId` an expense is filed against.
+ *
+ * Scoped by `user_id` and by `deleted_at IS NULL` together, so an unknown id,
+ * another user's, and one that has been deleted are all simply "no row" — which
+ * is what lets the expense routes answer the same 422 for all three without
+ * ever confirming another account's id is real.
+ */
+export async function findLiveCategoryById(
+  executor: Executor,
+  userId: string,
+  id: string,
+): Promise<CategoryRow | undefined> {
+  const { rows } = await executor.query<CategoryRow>(
+    `SELECT id, user_id, name, created_at, updated_at, deleted_at
+     FROM categories
+     WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL`,
+    [id, userId],
+  );
+
+  return rows[0];
+}
+
 export type CreateOutcome =
   | { status: 'created'; category: CategoryRow }
   | { status: 'conflict' };

@@ -1,0 +1,920 @@
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { randomBytes } from 'node:crypto';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import type { FastifyInstance } from 'fastify';
+import { buildApp } from '../app.js';
+import { parseConfig, type Config } from '../config.js';
+import { createDatabase, type Database } from '../db.js';
+import type { EmailTransport } from '../email/transport.js';
+import type { ReceiptExtractor } from '../receipts/extraction.js';
+import { todayInMalaysia } from '../routes/expenses.js';
+
+const PASSWORD = 'correcthorsebattery';
+const UNKNOWN_ID = '00000000-0000-4000-8000-000000000000';
+
+/** A date in the past, so it is valid whenever this suite runs. */
+const PURCHASED_ON = '2026-08-08';
+
+let root: string;
+let config: Config;
+let database: Database;
+let app: FastifyInstance;
+
+/** Registration sends mail; nothing here asserts on it. See categories.test.ts. */
+const silentTransport: EmailTransport = {
+  name: 'silent',
+  sendVerificationEmail: async () => {},
+  sendPasswordResetEmail: async () => {},
+};
+
+/**
+ * Uploads here exist only to give expenses something to attach to. Without an
+ * injected extractor `buildApp` picks the real Gemini one whenever
+ * GEMINI_API_KEY is in the environment, and every upload becomes a live call.
+ */
+const skippingExtractor: ReceiptExtractor = {
+  model: 'fake-model',
+  extract: async () => ({ status: 'skipped' }),
+};
+
+function jpeg(tag: string): Buffer {
+  return Buffer.concat([
+    Buffer.from([0xff, 0xd8, 0xff, 0xe0]),
+    Buffer.from(`padding-${tag}`.padEnd(32, '.')),
+  ]);
+}
+
+function multipart(content: Buffer) {
+  const boundary = `----vitest${randomBytes(8).toString('hex')}`;
+
+  return {
+    headers: { 'content-type': `multipart/form-data; boundary=${boundary}` },
+    payload: Buffer.concat([
+      Buffer.from(
+        `--${boundary}\r\n` +
+          'Content-Disposition: form-data; name="file"; filename="receipt.jpg"\r\n' +
+          'Content-Type: image/jpeg\r\n\r\n',
+      ),
+      content,
+      Buffer.from(`\r\n--${boundary}--\r\n`),
+    ]),
+  };
+}
+
+beforeAll(async () => {
+  root = await mkdtemp(join(tmpdir(), 'exp16-expenses-'));
+  config = parseConfig({
+    ...process.env,
+    JWT_SECRET: 'test-secret-at-least-thirty-two-chars',
+    PUBLIC_BASE_URL: 'http://localhost:3000',
+    LOG_LEVEL: 'silent',
+    RECEIPTS_PATH: root,
+  });
+  database = createDatabase(config);
+  await database.pool.query('SELECT 1 FROM expenses LIMIT 0');
+});
+
+afterAll(async () => {
+  await database.close();
+  await rm(root, { recursive: true, force: true });
+});
+
+beforeEach(async () => {
+  await database.pool.query('TRUNCATE users CASCADE');
+  app = buildApp({
+    config,
+    database,
+    emailTransport: silentTransport,
+    extractor: skippingExtractor,
+  });
+  await app.ready();
+});
+
+afterEach(async () => {
+  await app.close();
+});
+
+type Account = { token: string; userId: string };
+
+async function account(email: string): Promise<Account> {
+  await app.inject({
+    method: 'POST',
+    url: '/auth/register',
+    payload: { email, password: PASSWORD },
+  });
+
+  await database.pool.query('UPDATE users SET email_verified = true WHERE email = $1', [
+    email,
+  ]);
+
+  const login = await app.inject({
+    method: 'POST',
+    url: '/auth/login',
+    payload: { email, password: PASSWORD },
+  });
+
+  const { rows } = await database.pool.query<{ id: string }>(
+    'SELECT id FROM users WHERE email = $1',
+    [email],
+  );
+
+  return {
+    token: (login.json() as { accessToken: string }).accessToken,
+    userId: rows[0]!.id,
+  };
+}
+
+function auth(token: string) {
+  return { authorization: `Bearer ${token}` };
+}
+
+type Category = { id: string; name: string };
+
+async function categories(token: string): Promise<Category[]> {
+  const response = await app.inject({
+    method: 'GET',
+    url: '/categories',
+    headers: auth(token),
+  });
+
+  return response.json() as Category[];
+}
+
+async function categoryNamed(token: string, name: string): Promise<string> {
+  const found = (await categories(token)).find((c) => c.name === name);
+
+  if (!found) {
+    throw new Error(`no category named ${name}`);
+  }
+
+  return found.id;
+}
+
+async function upload(token: string, tag = 'a'): Promise<string> {
+  const { headers, payload } = multipart(jpeg(tag));
+  const response = await app.inject({
+    method: 'POST',
+    url: '/receipts',
+    headers: { ...headers, ...auth(token) },
+    payload,
+  });
+
+  return (response.json() as { id: string }).id;
+}
+
+function create(token: string, payload: unknown) {
+  return app.inject({
+    method: 'POST',
+    url: '/expenses',
+    headers: auth(token),
+    payload: payload as never,
+  });
+}
+
+function fetchOne(token: string, id: string) {
+  return app.inject({ method: 'GET', url: `/expenses/${id}`, headers: auth(token) });
+}
+
+function list(token: string) {
+  return app.inject({ method: 'GET', url: '/expenses', headers: auth(token) });
+}
+
+function patch(token: string, id: string, payload: unknown) {
+  return app.inject({
+    method: 'PATCH',
+    url: `/expenses/${id}`,
+    headers: auth(token),
+    payload: payload as never,
+  });
+}
+
+function remove(token: string, id: string) {
+  return app.inject({ method: 'DELETE', url: `/expenses/${id}`, headers: auth(token) });
+}
+
+type Expense = {
+  id: string;
+  category: { id: string; name: string };
+  receiptId: string | null;
+  purchasedOn: string;
+  purchasedAtTime: string | null;
+  totalCents: number;
+  subtotalCents: number | null;
+  taxCents: number | null;
+  roundingCents: number | null;
+  currency: string;
+  merchantName: string | null;
+  merchantTaxId: string | null;
+  receiptNumber: string | null;
+  paymentMethod: string | null;
+  note: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+/** The minimum a valid expense needs (AC-4). */
+async function minimal(token: string, overrides: Record<string, unknown> = {}) {
+  return {
+    categoryId: await categoryNamed(token, 'Food'),
+    totalCents: 2685,
+    purchasedOn: PURCHASED_ON,
+    ...overrides,
+  };
+}
+
+async function anExpense(token: string, overrides: Record<string, unknown> = {}) {
+  const response = await create(token, await minimal(token, overrides));
+
+  expect(response.statusCode).toBe(201);
+
+  return response.json() as Expense;
+}
+
+function fields(response: { json: () => unknown }): Record<string, string> {
+  return (response.json() as { fields: Record<string, string> }).fields;
+}
+
+describe('schema', () => {
+  it('AC-3: one live expense per receipt, ignoring deleted rows and nulls', async () => {
+    const { rows } = await database.pool.query<{ indexdef: string }>(
+      `SELECT indexdef FROM pg_indexes
+       WHERE tablename = 'expenses' AND indexname = 'expenses_receipt_id_live_unique'`,
+    );
+
+    expect(rows[0]?.indexdef).toContain('UNIQUE');
+    expect(rows[0]?.indexdef).toContain('deleted_at IS NULL');
+    expect(rows[0]?.indexdef).toContain('receipt_id IS NOT NULL');
+  });
+
+  it('AC-3: the listing index orders purchases descending', async () => {
+    const { rows } = await database.pool.query<{ indexdef: string }>(
+      `SELECT indexdef FROM pg_indexes
+       WHERE tablename = 'expenses' AND indexname = 'expenses_user_id_purchased_on_idx'`,
+    );
+
+    expect(rows[0]?.indexdef).toContain('purchased_on DESC');
+  });
+
+  /**
+   * AC-2. The behaviour the FK choice exists for, rather than an assertion about
+   * the catalogue: RESTRICT is checked per row and fails depending on the order
+   * a cascade happens to delete in, where NO ACTION defers to the end of the
+   * statement and sees a consistent world.
+   */
+  it('AC-2: deleting a user removes their expenses instead of erroring', async () => {
+    const { token, userId } = await account('cascade@example.com');
+    const receiptId = await upload(token);
+    await anExpense(token, { receiptId });
+
+    await expect(
+      database.pool.query('DELETE FROM users WHERE id = $1', [userId]),
+    ).resolves.toBeTruthy();
+
+    const { rows } = await database.pool.query<{ count: string }>(
+      'SELECT count(*) FROM expenses WHERE user_id = $1',
+      [userId],
+    );
+    expect(Number(rows[0]!.count)).toBe(0);
+  });
+
+  it('AC-2: the foreign keys use NO ACTION, not RESTRICT', async () => {
+    const { rows } = await database.pool.query<{ conname: string; confdeltype: string }>(
+      `SELECT conname, confdeltype FROM pg_constraint
+       WHERE conrelid = 'expenses'::regclass AND contype = 'f'
+       ORDER BY conname`,
+    );
+
+    const byName = new Map(rows.map((r) => [r.conname, r.confdeltype]));
+
+    // 'a' is NO ACTION, 'r' is RESTRICT, 'c' is CASCADE.
+    expect(byName.get('expenses_category_id_fkey')).toBe('a');
+    expect(byName.get('expenses_receipt_id_fkey')).toBe('a');
+    expect(byName.get('expenses_user_id_fkey')).toBe('c');
+  });
+});
+
+describe('POST /expenses', () => {
+  it('AC-4: records an expense from the three required fields', async () => {
+    const { token } = await account('create@example.com');
+
+    const expense = await anExpense(token);
+
+    expect(expense.totalCents).toBe(2685);
+    expect(expense.purchasedOn).toBe(PURCHASED_ON);
+    expect(expense.category.name).toBe('Food');
+    expect(expense.receiptId).toBeNull();
+  });
+
+  it('AC-5: stores every optional field, and nulls the ones left out', async () => {
+    const { token } = await account('full@example.com');
+    const receiptId = await upload(token);
+
+    const expense = await anExpense(token, {
+      receiptId,
+      purchasedAtTime: '14:31:00',
+      subtotalCents: 2580,
+      taxCents: 103,
+      roundingCents: 2,
+      merchantName: 'Master Prawn Mee',
+      merchantTaxId: '202103359487',
+      receiptNumber: 'INV/2608/00291',
+      paymentMethod: 'Cash',
+      note: 'lunch in Melaka',
+    });
+
+    expect(expense).toMatchObject({
+      receiptId,
+      purchasedAtTime: '14:31:00',
+      subtotalCents: 2580,
+      taxCents: 103,
+      roundingCents: 2,
+      currency: 'MYR',
+      merchantName: 'Master Prawn Mee',
+      merchantTaxId: '202103359487',
+      receiptNumber: 'INV/2608/00291',
+      paymentMethod: 'Cash',
+      note: 'lunch in Melaka',
+    });
+
+    const bare = await anExpense(token);
+    expect(bare.purchasedAtTime).toBeNull();
+    expect(bare.subtotalCents).toBeNull();
+    expect(bare.taxCents).toBeNull();
+    expect(bare.roundingCents).toBeNull();
+    expect(bare.merchantName).toBeNull();
+    expect(bare.note).toBeNull();
+  });
+
+  it('AC-6: names each missing required field', async () => {
+    const { token } = await account('missing@example.com');
+    const full = await minimal(token);
+
+    for (const field of ['categoryId', 'totalCents', 'purchasedOn'] as const) {
+      const payload = { ...full };
+      delete (payload as Record<string, unknown>)[field];
+
+      const response = await create(token, payload);
+
+      expect(response.statusCode).toBe(400);
+      expect(fields(response)).toHaveProperty(field);
+    }
+  });
+
+  it('AC-6: rejects a total that is zero, negative, or fractional', async () => {
+    const { token } = await account('total@example.com');
+
+    for (const totalCents of [0, -500, 12.5]) {
+      const response = await create(token, await minimal(token, { totalCents }));
+
+      expect(response.statusCode).toBe(400);
+      expect(fields(response)).toHaveProperty('totalCents');
+    }
+  });
+
+  it('AC-6: rejects negative components but accepts negative rounding', async () => {
+    const { token } = await account('components@example.com');
+
+    for (const field of ['subtotalCents', 'taxCents'] as const) {
+      const response = await create(token, await minimal(token, { [field]: -1 }));
+
+      expect(response.statusCode).toBe(400);
+      expect(fields(response)).toHaveProperty(field);
+    }
+
+    // Malaysian receipts round down as often as up.
+    const rounded = await anExpense(token, { roundingCents: -2 });
+    expect(rounded.roundingCents).toBe(-2);
+  });
+
+  it('AC-7: refuses a future date and accepts today', async () => {
+    const { token } = await account('future@example.com');
+    const today = todayInMalaysia();
+    const tomorrow = new Date(`${today}T00:00:00Z`);
+    tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+
+    const refused = await create(
+      token,
+      await minimal(token, { purchasedOn: tomorrow.toISOString().slice(0, 10) }),
+    );
+    expect(refused.statusCode).toBe(400);
+    expect(fields(refused)).toHaveProperty('purchasedOn');
+
+    const accepted = await create(token, await minimal(token, { purchasedOn: today }));
+    expect(accepted.statusCode).toBe(201);
+  });
+
+  it('AC-7: refuses a date that is not a real calendar day or not ISO', async () => {
+    const { token } = await account('baddate@example.com');
+
+    for (const purchasedOn of ['2026-02-30', '2026-13-01', '08-08-2026', 'yesterday']) {
+      const response = await create(token, await minimal(token, { purchasedOn }));
+
+      expect(response.statusCode, purchasedOn).toBe(400);
+      expect(fields(response)).toHaveProperty('purchasedOn');
+    }
+  });
+
+  /**
+   * The reason `purchased_on` is read with `to_char` rather than through the Date
+   * `pg` builds. That Date sits at LOCAL midnight, so on this machine — UTC+8 —
+   * `toISOString().slice(0, 10)` reports the day before, and an expense filed for
+   * the 8th would read as the 7th on every screen and in every export.
+   */
+  it('AC-11: the purchase date survives a round trip in UTC+8', async () => {
+    const { token } = await account('roundtrip@example.com');
+
+    const created = await anExpense(token, { purchasedOn: '2026-08-08' });
+    expect(created.purchasedOn).toBe('2026-08-08');
+
+    expect((await fetchOne(token, created.id)).json()).toMatchObject({
+      purchasedOn: '2026-08-08',
+    });
+
+    const [listed] = (await list(token)).json() as Expense[];
+    expect(listed!.purchasedOn).toBe('2026-08-08');
+
+    // And the column really does hold that day, independently of how it is read.
+    const { rows } = await database.pool.query<{ day: string }>(
+      "SELECT to_char(purchased_on, 'YYYY-MM-DD') AS day FROM expenses WHERE id = $1",
+      [created.id],
+    );
+    expect(rows[0]!.day).toBe('2026-08-08');
+  });
+
+  /**
+   * The test above is a real guard, but only on a machine east of Greenwich:
+   * reverting to the Date-based read reproduced `2026-08-07` here and would go on
+   * passing in CI, which runs in UTC where local midnight and UTC midnight are
+   * the same instant.
+   *
+   * So the conversion is also asserted structurally, the way `categories.test.ts`
+   * asserts migration 0006 still carries its `WHERE NOT EXISTS`. This one fails
+   * everywhere.
+   */
+  it('AC-11: the date is converted in SQL, not through a JavaScript Date', async () => {
+    const source = await readFile(
+      new URL('../expenses/expenses.ts', import.meta.url),
+      'utf8',
+    );
+
+    expect(source).toContain("to_char(e.purchased_on, 'YYYY-MM-DD')");
+    expect(source).not.toMatch(/purchased_on\S*\.toISOString/);
+  });
+
+  it('AC-8: uppercases the currency, defaults it to MYR, and checks its shape', async () => {
+    const { token } = await account('currency@example.com');
+
+    expect((await anExpense(token, { currency: 'sgd' })).currency).toBe('SGD');
+    expect((await anExpense(token)).currency).toBe('MYR');
+
+    for (const currency of ['MY', 'RINGGIT', 'M1R', '']) {
+      const response = await create(token, await minimal(token, { currency }));
+
+      expect(response.statusCode, currency).toBe(400);
+      expect(fields(response)).toHaveProperty('currency');
+    }
+  });
+
+  it('AC-8: caps the note at 1000 characters and the text fields at 255', async () => {
+    const { token } = await account('lengths@example.com');
+
+    const longNote = await create(
+      token,
+      await minimal(token, { note: 'x'.repeat(1001) }),
+    );
+    expect(longNote.statusCode).toBe(400);
+    expect(fields(longNote)).toHaveProperty('note');
+
+    expect((await anExpense(token, { note: 'x'.repeat(1000) })).note).toHaveLength(1000);
+
+    const longMerchant = await create(
+      token,
+      await minimal(token, { merchantName: 'x'.repeat(256) }),
+    );
+    expect(longMerchant.statusCode).toBe(400);
+    expect(fields(longMerchant)).toHaveProperty('merchantName');
+  });
+
+  it('AC-8: trims text and turns blank into null', async () => {
+    const { token } = await account('trim@example.com');
+
+    const expense = await anExpense(token, {
+      merchantName: '  Master Prawn Mee  ',
+      receiptNumber: '   ',
+    });
+
+    expect(expense.merchantName).toBe('Master Prawn Mee');
+    expect(expense.receiptNumber).toBeNull();
+  });
+
+  it('AC-9: an unknown, deleted, or other account\'s category answers one 422', async () => {
+    const mine = await account('cat-mine@example.com');
+    const theirs = await account('cat-theirs@example.com');
+
+    const theirCategory = await categoryNamed(theirs.token, 'Food');
+    const doomed = await categoryNamed(mine.token, 'Medical');
+    await app.inject({
+      method: 'DELETE',
+      url: `/categories/${doomed}`,
+      headers: auth(mine.token),
+    });
+
+    const unknown = await create(
+      mine.token,
+      await minimal(mine.token, { categoryId: UNKNOWN_ID }),
+    );
+    const other = await create(
+      mine.token,
+      await minimal(mine.token, { categoryId: theirCategory }),
+    );
+    const deleted = await create(
+      mine.token,
+      await minimal(mine.token, { categoryId: doomed }),
+    );
+
+    expect(unknown.statusCode).toBe(422);
+    expect(unknown.json()).toEqual({ error: 'Category not found' });
+    expect(other.statusCode).toBe(422);
+    expect(other.body).toBe(unknown.body);
+    expect(deleted.statusCode).toBe(422);
+    expect(deleted.body).toBe(unknown.body);
+  });
+
+  it('AC-9: an unknown, deleted, or other account\'s receipt answers one 422', async () => {
+    const mine = await account('rec-mine@example.com');
+    const theirs = await account('rec-theirs@example.com');
+
+    const theirReceipt = await upload(theirs.token, 'theirs');
+    const doomed = await upload(mine.token, 'doomed');
+    await app.inject({
+      method: 'DELETE',
+      url: `/receipts/${doomed}`,
+      headers: auth(mine.token),
+    });
+
+    const unknown = await create(
+      mine.token,
+      await minimal(mine.token, { receiptId: UNKNOWN_ID }),
+    );
+    const other = await create(
+      mine.token,
+      await minimal(mine.token, { receiptId: theirReceipt }),
+    );
+    const deleted = await create(
+      mine.token,
+      await minimal(mine.token, { receiptId: doomed }),
+    );
+
+    expect(unknown.statusCode).toBe(422);
+    expect(unknown.json()).toEqual({ error: 'Receipt not found' });
+    expect(other.body).toBe(unknown.body);
+    expect(deleted.body).toBe(unknown.body);
+  });
+
+  it('AC-10: a receipt already confirmed answers 409', async () => {
+    const { token } = await account('taken@example.com');
+    const receiptId = await upload(token);
+
+    await anExpense(token, { receiptId });
+
+    const second = await create(token, await minimal(token, { receiptId }));
+
+    expect(second.statusCode).toBe(409);
+    expect(second.json()).toEqual({
+      error: 'Receipt is already attached to an expense',
+    });
+  });
+
+  it('AC-10: any number of expenses may have no receipt at all', async () => {
+    const { token } = await account('noreceipt@example.com');
+
+    await anExpense(token);
+    await anExpense(token);
+    await anExpense(token);
+
+    expect((await list(token)).json()).toHaveLength(3);
+  });
+});
+
+describe('GET /expenses', () => {
+  it('AC-11: newest purchase first, ties broken by when it was recorded', async () => {
+    const { token } = await account('order@example.com');
+
+    const older = await anExpense(token, { purchasedOn: '2026-07-01' });
+    const sameDayFirst = await anExpense(token, { purchasedOn: '2026-08-01' });
+    const sameDaySecond = await anExpense(token, { purchasedOn: '2026-08-01' });
+
+    const returned = ((await list(token)).json() as Expense[]).map((e) => e.id);
+
+    expect(returned).toEqual([sameDaySecond.id, sameDayFirst.id, older.id]);
+  });
+
+  it('AC-11: an account with none returns an empty array', async () => {
+    const { token } = await account('empty@example.com');
+
+    const response = await list(token);
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual([]);
+  });
+
+  it("AC-11: another account's expenses are never listed", async () => {
+    const mine = await account('list-mine@example.com');
+    const theirs = await account('list-theirs@example.com');
+
+    await anExpense(theirs.token);
+
+    expect((await list(mine.token)).json()).toEqual([]);
+  });
+
+  it('AC-12: a category deleted afterwards keeps labelling its expenses', async () => {
+    const { token } = await account('label@example.com');
+    const categoryId = await categoryNamed(token, 'Food');
+    const expense = await anExpense(token, { categoryId });
+
+    await app.inject({
+      method: 'DELETE',
+      url: `/categories/${categoryId}`,
+      headers: auth(token),
+    });
+
+    const [listed] = (await list(token)).json() as Expense[];
+    expect(listed!.category).toEqual({ id: categoryId, name: 'Food' });
+
+    expect((await fetchOne(token, expense.id)).json()).toMatchObject({
+      category: { id: categoryId, name: 'Food' },
+    });
+  });
+});
+
+describe('GET /expenses/:id', () => {
+  it('AC-13: returns one expense', async () => {
+    const { token } = await account('one@example.com');
+    const expense = await anExpense(token);
+
+    const response = await fetchOne(token, expense.id);
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual(expense);
+  });
+
+  it('AC-13: unknown, deleted, malformed, and another account\'s all answer one 404', async () => {
+    const mine = await account('find-mine@example.com');
+    const theirs = await account('find-theirs@example.com');
+
+    const theirExpense = await anExpense(theirs.token);
+    const deleted = await anExpense(mine.token);
+    await remove(mine.token, deleted.id);
+
+    const unknown = await fetchOne(mine.token, UNKNOWN_ID);
+    const other = await fetchOne(mine.token, theirExpense.id);
+    const gone = await fetchOne(mine.token, deleted.id);
+    const malformed = await fetchOne(mine.token, 'not-a-uuid');
+
+    expect(unknown.statusCode).toBe(404);
+    expect(unknown.json()).toEqual({ error: 'Expense not found' });
+    for (const response of [other, gone, malformed]) {
+      expect(response.statusCode).toBe(404);
+      expect(response.body).toBe(unknown.body);
+    }
+  });
+});
+
+describe('PATCH /expenses/:id', () => {
+  it('AC-14: changes only the field it was given', async () => {
+    const { token } = await account('patch@example.com');
+    const before = await anExpense(token, {
+      merchantName: 'Master Prawn Mee',
+      subtotalCents: 2580,
+      note: 'lunch',
+    });
+
+    const response = await patch(token, before.id, { totalCents: 2690 });
+
+    expect(response.statusCode).toBe(200);
+    const after = response.json() as Expense;
+
+    expect(after.totalCents).toBe(2690);
+    expect(after.merchantName).toBe('Master Prawn Mee');
+    expect(after.subtotalCents).toBe(2580);
+    expect(after.note).toBe('lunch');
+    expect(after.purchasedOn).toBe(before.purchasedOn);
+    expect(after.category).toEqual(before.category);
+  });
+
+  it('AC-14: an explicit null clears an optional field', async () => {
+    const { token } = await account('clear@example.com');
+    const expense = await anExpense(token, {
+      note: 'lunch',
+      receiptNumber: 'INV/1',
+      subtotalCents: 2580,
+    });
+
+    const response = await patch(token, expense.id, {
+      note: null,
+      receiptNumber: null,
+      subtotalCents: null,
+    });
+
+    expect(response.statusCode).toBe(200);
+    const after = response.json() as Expense;
+    expect(after.note).toBeNull();
+    expect(after.receiptNumber).toBeNull();
+    expect(after.subtotalCents).toBeNull();
+    expect(after.totalCents).toBe(2685);
+  });
+
+  it('AC-14: the three required fields cannot be nulled', async () => {
+    const { token } = await account('nonull@example.com');
+    const expense = await anExpense(token);
+
+    for (const field of ['categoryId', 'totalCents', 'purchasedOn'] as const) {
+      const response = await patch(token, expense.id, { [field]: null });
+
+      expect(response.statusCode, field).toBe(400);
+      expect(fields(response)).toHaveProperty(field);
+    }
+  });
+
+  it('AC-14: the same validation applies to a patch', async () => {
+    const { token } = await account('patchvalid@example.com');
+    const expense = await anExpense(token);
+
+    expect((await patch(token, expense.id, { totalCents: 0 })).statusCode).toBe(400);
+    expect((await patch(token, expense.id, { purchasedOn: '2099-01-01' })).statusCode).toBe(
+      400,
+    );
+    expect((await patch(token, expense.id, { currency: 'MY' })).statusCode).toBe(400);
+    expect(
+      (await patch(token, expense.id, { categoryId: UNKNOWN_ID })).statusCode,
+    ).toBe(422);
+  });
+
+  it('AC-14: an empty body leaves the expense exactly as it was', async () => {
+    const { token } = await account('nochange@example.com');
+    const before = await anExpense(token);
+
+    const response = await patch(token, before.id, {});
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual(before);
+  });
+
+  it('AC-14: unknown, deleted, malformed, and another account\'s answer 404', async () => {
+    const mine = await account('patch-mine@example.com');
+    const theirs = await account('patch-theirs@example.com');
+
+    const theirExpense = await anExpense(theirs.token);
+    const deleted = await anExpense(mine.token);
+    await remove(mine.token, deleted.id);
+
+    for (const id of [UNKNOWN_ID, theirExpense.id, deleted.id, 'not-a-uuid']) {
+      const response = await patch(mine.token, id, { totalCents: 100 });
+
+      expect(response.statusCode, id).toBe(404);
+      expect(response.json()).toEqual({ error: 'Expense not found' });
+    }
+
+    // And theirs was not touched.
+    expect((await fetchOne(theirs.token, theirExpense.id)).json()).toEqual(theirExpense);
+  });
+
+  it('AC-15: attaches, swaps, and detaches a receipt', async () => {
+    const { token } = await account('relink@example.com');
+    const first = await upload(token, 'first');
+    const second = await upload(token, 'second');
+    const expense = await anExpense(token);
+
+    expect(expense.receiptId).toBeNull();
+
+    const attached = await patch(token, expense.id, { receiptId: first });
+    expect(attached.statusCode).toBe(200);
+    expect((attached.json() as Expense).receiptId).toBe(first);
+
+    const swapped = await patch(token, expense.id, { receiptId: second });
+    expect(swapped.statusCode).toBe(200);
+    expect((swapped.json() as Expense).receiptId).toBe(second);
+
+    const detached = await patch(token, expense.id, { receiptId: null });
+    expect(detached.statusCode).toBe(200);
+    expect((detached.json() as Expense).receiptId).toBeNull();
+
+    // Freed by the swap, so the first receipt can back something else now.
+    const other = await anExpense(token, { receiptId: first });
+    expect(other.receiptId).toBe(first);
+  });
+
+  it('AC-15: swapping onto a receipt another live expense holds answers 409', async () => {
+    const { token } = await account('swapclash@example.com');
+    const taken = await upload(token, 'taken');
+    await anExpense(token, { receiptId: taken });
+    const other = await anExpense(token);
+
+    const response = await patch(token, other.id, { receiptId: taken });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({
+      error: 'Receipt is already attached to an expense',
+    });
+
+    // The attempt changed nothing.
+    expect((await fetchOne(token, other.id)).json()).toMatchObject({ receiptId: null });
+  });
+});
+
+describe('DELETE /expenses/:id', () => {
+  it('AC-16: soft deletes, keeps the row, and refuses a second attempt', async () => {
+    const { token } = await account('del@example.com');
+    const expense = await anExpense(token);
+
+    expect((await remove(token, expense.id)).statusCode).toBe(204);
+
+    const { rows } = await database.pool.query<{ deleted_at: Date | null }>(
+      'SELECT deleted_at FROM expenses WHERE id = $1',
+      [expense.id],
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.deleted_at).not.toBeNull();
+
+    expect((await remove(token, expense.id)).statusCode).toBe(404);
+    expect((await list(token)).json()).toEqual([]);
+  });
+
+  it('AC-17: deleting an expense frees its receipt to be confirmed again', async () => {
+    const { token } = await account('free@example.com');
+    const receiptId = await upload(token);
+    const first = await anExpense(token, { receiptId });
+
+    await remove(token, first.id);
+
+    const second = await create(token, await minimal(token, { receiptId }));
+
+    expect(second.statusCode).toBe(201);
+    expect((second.json() as Expense).id).not.toBe(first.id);
+    expect((second.json() as Expense).receiptId).toBe(receiptId);
+  });
+});
+
+describe('todayInMalaysia', () => {
+  /**
+   * The whole point of the helper. Just after midnight in Kuala Lumpur it is
+   * still the previous day in UTC, so a plain UTC comparison would refuse an
+   * expense entered for today.
+   */
+  it('AC-7: reports the Malaysian day, not the UTC one', () => {
+    expect(todayInMalaysia(Date.UTC(2026, 7, 8, 17, 30))).toBe('2026-08-09');
+    expect(todayInMalaysia(Date.UTC(2026, 7, 8, 12, 0))).toBe('2026-08-08');
+    // 07:59 UTC is 15:59 the same day in Malaysia.
+    expect(todayInMalaysia(Date.UTC(2026, 7, 8, 7, 59))).toBe('2026-08-08');
+  });
+});
+
+describe('authentication and limits', () => {
+  it('AC-20: every route refuses a missing or invalid token', async () => {
+    const { token } = await account('guard@example.com');
+    const expense = await anExpense(token);
+
+    const withoutHeader = [
+      await app.inject({ method: 'GET', url: '/expenses' }),
+      await app.inject({ method: 'POST', url: '/expenses', payload: {} }),
+      await app.inject({ method: 'GET', url: `/expenses/${expense.id}` }),
+      await app.inject({
+        method: 'PATCH',
+        url: `/expenses/${expense.id}`,
+        payload: { totalCents: 1 },
+      }),
+      await app.inject({ method: 'DELETE', url: `/expenses/${expense.id}` }),
+    ];
+
+    for (const response of withoutHeader) {
+      expect(response.statusCode).toBe(401);
+    }
+
+    const garbage = await app.inject({
+      method: 'GET',
+      url: '/expenses',
+      headers: { authorization: 'Bearer not.a.token' },
+    });
+    expect(garbage.statusCode).toBe(401);
+
+    // AC-20: the guard must not have escaped its scope onto /health.
+    const health = await app.inject({ method: 'GET', url: '/health' });
+    expect(health.statusCode).toBe(200);
+
+    // Nothing was changed by any of the refused calls.
+    expect((await fetchOne(token, expense.id)).json()).toEqual(expense);
+  });
+
+  it('AC-20: expense routes are not subject to the auth 10/min budget', async () => {
+    const { token } = await account('burst@example.com');
+
+    const responses = [];
+    for (let index = 0; index < 15; index += 1) {
+      responses.push(await list(token));
+    }
+
+    expect(responses.every((r) => r.statusCode === 200)).toBe(true);
+  });
+});

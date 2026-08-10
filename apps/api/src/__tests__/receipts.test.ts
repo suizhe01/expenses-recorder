@@ -560,6 +560,181 @@ describe('DELETE /receipts/:id', () => {
   });
 });
 
+/**
+ * EXP-16 AC-18 and AC-19 — the receipt side of expense CRUD. A confirmed receipt
+ * cannot be deleted out from under the expense it proves, and every receipt
+ * payload says which expense holds it.
+ */
+describe('EXP-16: receipts and expenses', () => {
+  /** Records an expense, optionally against a receipt, and returns its id. */
+  async function confirm(token: string, receiptId?: string): Promise<string> {
+    const categories = await app.inject({
+      method: 'GET',
+      url: '/categories',
+      headers: auth(token),
+    });
+    const categoryId = (categories.json() as { id: string; name: string }[]).find(
+      (category) => category.name === 'Food',
+    )!.id;
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/expenses',
+      headers: auth(token),
+      payload: {
+        categoryId,
+        totalCents: 2685,
+        purchasedOn: '2026-08-08',
+        ...(receiptId === undefined ? {} : { receiptId }),
+      },
+    });
+
+    expect(response.statusCode).toBe(201);
+
+    return (response.json() as { id: string }).id;
+  }
+
+  function detach(token: string, expenseId: string) {
+    return app.inject({
+      method: 'PATCH',
+      url: `/expenses/${expenseId}`,
+      headers: auth(token),
+      payload: { receiptId: null },
+    });
+  }
+
+  it('AC-18: refuses to delete a receipt an expense still needs', async () => {
+    const { token, userId } = await account('attached@example.com');
+    const created = await upload(token, jpeg());
+    const { id } = created.json() as { id: string };
+    await confirm(token, id);
+
+    const response = await remove(token, id);
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({ error: 'Receipt is attached to an expense' });
+
+    // Still live, still listed, still on disk, still downloadable.
+    const { rows } = await database.pool.query<{ deleted_at: Date | null }>(
+      'SELECT deleted_at FROM receipts WHERE id = $1',
+      [id],
+    );
+    expect(rows[0]!.deleted_at).toBeNull();
+    expect((await list(token)).json()).toHaveLength(1);
+    expect(await storedFiles(userId)).toHaveLength(1);
+    expect((await fetchFile(token, id)).statusCode).toBe(200);
+  });
+
+  it('AC-18: deletes normally once the expense detaches from it', async () => {
+    const { token } = await account('detached@example.com');
+    const created = await upload(token, jpeg());
+    const { id } = created.json() as { id: string };
+    const expenseId = await confirm(token, id);
+
+    expect((await remove(token, id)).statusCode).toBe(409);
+    expect((await detach(token, expenseId)).statusCode).toBe(200);
+    expect((await remove(token, id)).statusCode).toBe(204);
+  });
+
+  it('AC-18: deletes normally once the expense itself is deleted', async () => {
+    const { token } = await account('expense-gone@example.com');
+    const created = await upload(token, jpeg());
+    const { id } = created.json() as { id: string };
+    const expenseId = await confirm(token, id);
+
+    expect((await remove(token, id)).statusCode).toBe(409);
+
+    const deleted = await app.inject({
+      method: 'DELETE',
+      url: `/expenses/${expenseId}`,
+      headers: auth(token),
+    });
+    expect(deleted.statusCode).toBe(204);
+
+    expect((await remove(token, id)).statusCode).toBe(204);
+  });
+
+  /**
+   * The 409 must never be reachable for a receipt the caller does not own, or it
+   * would confirm that another account's id is real — the same reasoning behind
+   * the shared 404 in the ownership tests above.
+   */
+  it("AC-18: another account's confirmed receipt still answers 404", async () => {
+    const mine = await account('oracle-mine@example.com');
+    const theirs = await account('oracle-theirs@example.com');
+
+    const created = await upload(mine.token, jpeg());
+    const { id } = created.json() as { id: string };
+    await confirm(mine.token, id);
+
+    const other = await remove(theirs.token, id);
+    const unknown = await remove(theirs.token, UNKNOWN_ID);
+
+    expect(other.statusCode).toBe(404);
+    expect(other.body).toBe(unknown.body);
+  });
+
+  /**
+   * The allowlist trap: `expenseId` is stripped from every response unless it is
+   * declared in the route's response schema. Asserting it on the upload
+   * responses as well as the list is what makes that visible — adding the field
+   * to the payload alone leaves all three silently missing it.
+   */
+  it('AC-19: expenseId is present on the list and on both upload responses', async () => {
+    const { token } = await account('expenseid@example.com');
+
+    const created = await upload(token, jpeg());
+    expect(created.statusCode).toBe(201);
+    const body = created.json() as { id: string; expenseId: string | null };
+    expect(body).toHaveProperty('expenseId');
+    // Nothing can have confirmed a receipt created a moment ago.
+    expect(body.expenseId).toBeNull();
+
+    const beforeConfirm = (await list(token)).json() as { expenseId: string | null }[];
+    expect(beforeConfirm[0]).toHaveProperty('expenseId');
+    expect(beforeConfirm[0]!.expenseId).toBeNull();
+
+    const expenseId = await confirm(token, body.id);
+
+    const afterConfirm = (await list(token)).json() as { expenseId: string | null }[];
+    expect(afterConfirm[0]!.expenseId).toBe(expenseId);
+
+    // Re-uploading the same bytes is the retry path and answers 200; it must
+    // report the expense holding them too.
+    const again = await upload(token, jpeg());
+    expect(again.statusCode).toBe(200);
+    expect((again.json() as { expenseId: string | null }).expenseId).toBe(expenseId);
+  });
+
+  it('AC-19: a receipt confirmed by nothing reports null, not a missing key', async () => {
+    const { token } = await account('unconfirmed@example.com');
+    await upload(token, jpeg('one'));
+    await upload(token, jpeg('two'));
+
+    const rows = (await list(token)).json() as Record<string, unknown>[];
+
+    expect(rows).toHaveLength(2);
+    for (const row of rows) {
+      expect(Object.keys(row)).toContain('expenseId');
+      expect(row.expenseId).toBeNull();
+    }
+  });
+
+  /** NG-12. The cost fields must stay invisible now that a new field was added. */
+  it('NG-12: adding expenseId did not expose tokens or cost', async () => {
+    const { token } = await account('nocost@example.com');
+    const created = await upload(token, jpeg());
+    const listed = await list(token);
+
+    for (const body of [created.body, listed.body]) {
+      expect(body).not.toContain('costMicros');
+      expect(body).not.toContain('cost_micros');
+      expect(body).not.toContain('promptTokens');
+      expect(body).not.toContain('outputTokens');
+    }
+  });
+});
+
 describe('ownership', () => {
   it("AC-11: another user's receipt is indistinguishable from one that is absent", async () => {
     const mine = await account('a@example.com');

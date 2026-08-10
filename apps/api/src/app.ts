@@ -14,6 +14,7 @@ import { registerVerifyRoute } from './routes/verify.js';
 import { registerResetPasswordRoutes } from './routes/reset-password.js';
 import { registerCategoryRoutes } from './routes/categories.js';
 import { registerReceiptRoutes } from './routes/receipts.js';
+import { registerExpenseRoutes } from './routes/expenses.js';
 import { createConsoleTransport, type EmailTransport } from './email/transport.js';
 import { createResendTransport } from './email/resend.js';
 import {
@@ -108,6 +109,7 @@ export function buildApp({
         { name: 'Auth', description: 'Registration, sessions, verification, password reset' },
         { name: 'Categories', description: 'User-owned expense categories' },
         { name: 'Receipts', description: 'Receipt images' },
+        { name: 'Expenses', description: 'Recorded expenses, with or without a receipt' },
       ],
     },
   });
@@ -180,6 +182,14 @@ export function buildApp({
   // /health, which must stay unauthenticated.
   app.register(async (scope) => {
     registerCategoryRoutes(scope, { database });
+  });
+
+  // EXP-16 AC-20: its own encapsulated scope, for the same two reasons as
+  // categories — the guard is a preHandler and must not reach /health, and
+  // these routes stay OUTSIDE the 10/min auth budget, which is sized for
+  // unauthenticated login attempts rather than for someone filing receipts.
+  app.register(async (scope) => {
+    registerExpenseRoutes(scope, { database });
   });
 
   // EXP-13: receipts get their own scope for the same reason — the guard is a

@@ -66,8 +66,30 @@ describe('the OpenAPI document', () => {
       '/receipts',
       '/receipts/{id}',
       '/receipts/{id}/file',
+      '/expenses',
+      '/expenses/{id}',
     ]) {
       expect(paths).toContain(expected);
+    }
+  });
+
+  /** EXP-16 AC-21. The tag has to be declared, not merely referenced by a route. */
+  it('AC-1: declares the Expenses tag and puts all five routes under it', () => {
+    const doc = app.swagger() as unknown as {
+      tags?: { name: string }[];
+      paths: Record<string, Record<string, { tags?: string[] }>>;
+    };
+
+    expect(doc.tags?.map((tag) => tag.name)).toContain('Expenses');
+
+    for (const [path, method] of [
+      ['/expenses', 'get'],
+      ['/expenses', 'post'],
+      ['/expenses/{id}', 'get'],
+      ['/expenses/{id}', 'patch'],
+      ['/expenses/{id}', 'delete'],
+    ] as const) {
+      expect(doc.paths[path]?.[method]?.tags, `${method} ${path}`).toContain('Expenses');
     }
   });
 
