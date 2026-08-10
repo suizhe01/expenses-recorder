@@ -1339,6 +1339,371 @@ describe('DELETE /expenses/:id', () => {
   });
 });
 
+/**
+ * EXP-20 — the streaming CSV export. Shares EXP-18's filter contract, so the
+ * assertions below compare against `GET /expenses` wherever the two must agree.
+ */
+describe('EXP-20: GET /expenses/export.csv', () => {
+  function exportWith(token: string, query = '') {
+    return app.inject({
+      method: 'GET',
+      url: `/expenses/export.csv${query === '' ? '' : `?${query}`}`,
+      headers: auth(token),
+    });
+  }
+
+  const HEADER =
+    'ID,Purchase Date,Purchase Time,Category,Category ID,Merchant,Merchant Tax ID,'
+    + 'Receipt No,Total,Subtotal,Tax,Rounding,Currency,Payment Method,Note,'
+    + 'Receipt ID,Created At,Updated At';
+
+  /** The body with its BOM removed, split into records. Empty tail dropped. */
+  function records(body: string): string[] {
+    return body.replace(/^\uFEFF/, '').split('\r\n').slice(0, -1);
+  }
+
+  /** Column 1 of every data row. Only safe where no cell holds a newline. */
+  function purchaseDates(body: string): string[] {
+    return records(body)
+      .slice(1)
+      .map((row) => row.split(',')[1] as string);
+  }
+
+  it('AC-1: answers 200 as a text/csv attachment', async () => {
+    const { token } = await account('csv-basic@example.com');
+    await anExpense(token);
+
+    const response = await exportWith(token);
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['content-type']).toBe('text/csv; charset=utf-8');
+    expect(response.headers['content-disposition']).toContain('attachment');
+  });
+
+  it('AC-8: opens with a UTF-8 BOM', async () => {
+    const { token } = await account('csv-bom@example.com');
+    await anExpense(token);
+
+    const response = await exportWith(token);
+
+    expect(response.rawPayload.subarray(0, 3)).toEqual(
+      Buffer.from([0xef, 0xbb, 0xbf]),
+    );
+  });
+
+  it('AC-4: puts the human-readable header row first', async () => {
+    const { token } = await account('csv-header@example.com');
+    await anExpense(token);
+
+    const response = await exportWith(token);
+
+    expect(records(response.body)[0]).toBe(HEADER);
+  });
+
+  it('AC-12: an export matching nothing is the header row alone', async () => {
+    const { token } = await account('csv-empty@example.com');
+
+    const response = await exportWith(token);
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toBe(`\uFEFF${HEADER}\r\n`);
+  });
+
+  it('AC-3: runs oldest purchase first, the reverse of the list', async () => {
+    const { token } = await account('csv-order@example.com');
+    const food = await categoryNamed(token, 'Food');
+
+    for (const purchasedOn of ['2026-07-31', '2026-06-15', '2026-08-08']) {
+      await anExpense(token, { purchasedOn, categoryId: food });
+    }
+
+    const exported = purchaseDates((await exportWith(token)).body);
+    const listed = ((await list(token)).json() as Expense[]).map(
+      (expense) => expense.purchasedOn,
+    );
+
+    expect(exported).toEqual(['2026-06-15', '2026-07-31', '2026-08-08']);
+    // The same rows, deliberately the other way round.
+    expect(exported).toEqual([...listed].reverse());
+  });
+
+  it('AC-5, AC-6: renders amounts as decimals and nulls as empty cells', async () => {
+    const { token } = await account('csv-amounts@example.com');
+    await anExpense(token, {
+      totalCents: 14930,
+      subtotalCents: 5,
+      taxCents: 0,
+      roundingCents: -2,
+    });
+
+    const cells = (records((await exportWith(token)).body)[1] as string).split(',');
+
+    // Total, Subtotal, Tax, Rounding, then Currency.
+    expect(cells.slice(8, 13)).toEqual(['149.30', '0.05', '0.00', '-0.02', 'MYR']);
+    // Purchase Time was never set, so it is empty rather than the text "null".
+    expect(cells[2]).toBe('');
+  });
+
+  /**
+   * AC-7, end to end.
+   *
+   * The TZ sweep is what makes this test able to fail. The suite is pinned to
+   * Asia/Kuala_Lumpur, so a renderer that simply read the process timezone —
+   * the exact bug AC-7 forbids — produces the right answer here by luck and the
+   * assertion passes. Verified: swapping the implementation for
+   * `toLocaleString` left this test green until the sweep was added, and the
+   * container runs UTC, where that implementation is wrong.
+   *
+   * The same shape of blindness as EXP-17, one layer up.
+   */
+  it('AC-7: renders timestamps in Malaysian time whatever the server runs in', async () => {
+    const { token } = await account('csv-time@example.com');
+    const expense = await anExpense(token);
+
+    // 18:31Z is 02:31 the NEXT day in Kuala Lumpur, so a UTC render says the 8th.
+    await database.pool.query(
+      `UPDATE expenses SET created_at = $1, updated_at = $1 WHERE id = $2`,
+      ['2026-08-08T18:31:07.412Z', expense.id],
+    );
+
+    const original = process.env.TZ;
+
+    try {
+      for (const zone of ['UTC', 'America/New_York', 'Asia/Kuala_Lumpur']) {
+        process.env.TZ = zone;
+
+        const cells = (records((await exportWith(token)).body)[1] as string).split(',');
+
+        expect(cells[16], zone).toBe('2026-08-09 02:31:07');
+        expect(cells[17], zone).toBe('2026-08-09 02:31:07');
+      }
+    } finally {
+      process.env.TZ = original;
+    }
+  });
+
+  it('AC-9, AC-10: quotes awkward text and neutralises formulas', async () => {
+    const { token } = await account('csv-escape@example.com');
+    await anExpense(token, {
+      merchantName: '=cmd|\'/c calc\'!A1',
+      note: 'a, b "quoted" and\na newline',
+      purchasedOn: '2026-06-15',
+    });
+    await anExpense(token, { merchantName: '皇帝虾面', purchasedOn: '2026-06-16' });
+
+    const body = (await exportWith(token)).body;
+
+    // Guarded and quoted, so the spreadsheet treats it as text.
+    expect(body).toContain('"\'=cmd|\'/c calc\'!A1"');
+    // The note keeps its comma, its doubled quotes and its literal newline.
+    expect(body).toContain('"a, b ""quoted"" and\na newline"');
+    // Non-Latin text survives the round trip untouched.
+    expect(body).toContain('皇帝虾面');
+    // One header and two data rows: the embedded newline is a bare LF inside a
+    // quoted field, so it does not terminate a record the way CRLF does.
+    expect(records(body).length).toBe(3);
+    expect(body.split('\r\n').length - 1).toBe(3);
+  });
+
+  it('AC-2: applies the same filters as the list, and agrees with it', async () => {
+    const { token } = await account('csv-filters@example.com');
+    const food = await categoryNamed(token, 'Food');
+    const medical = await categoryNamed(token, 'Medical');
+    const receipt = await upload(token, 'csv-filter');
+
+    await anExpense(token, { purchasedOn: '2026-06-15', categoryId: food });
+    await anExpense(token, {
+      purchasedOn: '2026-07-01',
+      categoryId: medical,
+      receiptId: receipt,
+    });
+    await anExpense(token, { purchasedOn: '2026-08-08', categoryId: food });
+
+    for (const query of [
+      'from=2026-07-01',
+      'to=2026-07-01',
+      'from=2026-06-15&to=2026-07-01',
+      `categoryId=${food}`,
+      `categoryId=${food}&categoryId=${medical}`,
+      'hasReceipt=true',
+      'hasReceipt=false',
+      `from=2026-06-01&categoryId=${medical}&hasReceipt=true`,
+    ]) {
+      const exported = purchaseDates((await exportWith(token, query)).body);
+      const listed = (
+        (await app.inject({
+          method: 'GET',
+          url: `/expenses?${query}`,
+          headers: auth(token),
+        })).json() as Expense[]
+      ).map((expense) => expense.purchasedOn);
+
+      expect(exported, query).toEqual([...listed].reverse());
+    }
+  });
+
+  it('AC-2: answers 400 for a malformed or unrecognised parameter', async () => {
+    const { token } = await account('csv-400@example.com');
+
+    for (const [query, field] of [
+      ['from=notadate', 'from'],
+      ['catgeoryId=x', 'catgeoryId'],
+      ['hasReceipt=maybe', 'hasReceipt'],
+      ['from=2026-06-01&to=2026-01-01', 'from'],
+    ] as const) {
+      const response = await exportWith(token, query);
+
+      expect(response.statusCode, query).toBe(400);
+      expect(response.json()).toMatchObject({
+        error: 'Validation failed',
+        fields: expect.objectContaining({ [field]: expect.any(String) }),
+      });
+    }
+  });
+
+  it('AC-2: answers 422 for a category that cannot match', async () => {
+    const { token } = await account('csv-422@example.com');
+    const food = await categoryNamed(token, 'Food');
+
+    await app.inject({
+      method: 'DELETE',
+      url: `/categories/${food}`,
+      headers: auth(token),
+    });
+
+    const response = await exportWith(token, `categoryId=${food}`);
+
+    // 422 rather than an empty CSV: a file of nothing looks exactly like a
+    // period with no spending.
+    expect(response.statusCode).toBe(422);
+    expect(response.json()).toEqual({ error: 'Category not found' });
+  });
+
+  it('AC-11: names the download after the range it covers', async () => {
+    const { token } = await account('csv-filename@example.com');
+    const today = todayInMalaysia();
+
+    for (const [query, expected] of [
+      ['from=2026-01-01&to=2026-06-30', 'expenses-2026-01-01-to-2026-06-30.csv'],
+      ['from=2026-01-01', `expenses-2026-01-01-to-${today}.csv`],
+      ['to=2026-06-30', 'expenses-start-to-2026-06-30.csv'],
+      ['', `expenses-start-to-${today}.csv`],
+    ] as const) {
+      const response = await exportWith(token, query);
+
+      expect(response.headers['content-disposition'], query).toBe(
+        `attachment; filename="${expected}"`,
+      );
+    }
+  });
+
+  it('AC-1: refuses a missing or invalid token', async () => {
+    const anonymous = await app.inject({
+      method: 'GET',
+      url: '/expenses/export.csv',
+    });
+    const garbage = await app.inject({
+      method: 'GET',
+      url: '/expenses/export.csv',
+      headers: { authorization: 'Bearer not.a.token' },
+    });
+
+    expect(anonymous.statusCode).toBe(401);
+    expect(garbage.statusCode).toBe(401);
+  });
+
+  it('AC-16: resolves as its own route, not as an expense id', async () => {
+    const { token } = await account('csv-routing@example.com');
+
+    const response = await exportWith(token);
+
+    // The `:id` route would answer 404 with a JSON body for "export.csv".
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['content-type']).toBe('text/csv; charset=utf-8');
+  });
+
+  it('NG-10: leaves soft-deleted expenses out', async () => {
+    const { token } = await account('csv-deleted@example.com');
+    const kept = await anExpense(token, { purchasedOn: '2026-06-15' });
+    const gone = await anExpense(token, { purchasedOn: '2026-06-16' });
+
+    await remove(token, gone.id);
+
+    const body = (await exportWith(token)).body;
+
+    expect(body).toContain(kept.id);
+    expect(body).not.toContain(gone.id);
+  });
+
+  it('sees only the caller\'s own expenses', async () => {
+    const mine = await account('csv-mine@example.com');
+    const theirs = await account('csv-theirs@example.com');
+    const ours = await anExpense(mine.token, { purchasedOn: '2026-06-15' });
+    const foreign = await anExpense(theirs.token, { purchasedOn: '2026-06-15' });
+
+    const body = (await exportWith(mine.token)).body;
+
+    expect(body).toContain(ours.id);
+    expect(body).not.toContain(foreign.id);
+  });
+
+  /**
+   * AC-13. The batching test, and the reason it is written this way.
+   *
+   * 1,200 rows is more than two 500-row batches, so the cursor is exercised
+   * twice. `i % 7` puts ~171 rows on each of seven dates, and a single
+   * `generate_series` insert gives them all the same `created_at` to the
+   * millisecond — so the ORDER BY falls through to `id`, and any cursor that
+   * stops short of the full `(purchased_on, created_at, id)` triple either
+   * skips rows or repeats them.
+   */
+  it('AC-13: exports every row exactly once across many batches', async () => {
+    const { token, userId } = await account('csv-batches@example.com');
+    const food = await categoryNamed(token, 'Food');
+
+    await database.pool.query(
+      `INSERT INTO expenses (user_id, category_id, total_cents, purchased_on)
+       SELECT $1, $2, 100 + i, DATE '2020-01-01' + (i % 7)
+       FROM generate_series(1, 1200) AS i`,
+      [userId, food],
+    );
+
+    const rows = records((await exportWith(token)).body).slice(1);
+    const ids = rows.map((row) => row.split(',')[0] as string);
+
+    expect(rows.length).toBe(1200);
+    expect(new Set(ids).size).toBe(1200);
+
+    // Still fully ordered across every batch boundary.
+    const dates = rows.map((row) => row.split(',')[1] as string);
+    expect(dates).toEqual([...dates].sort());
+  });
+
+  it('AC-13: keeps the filters applied across batches', async () => {
+    const { token, userId } = await account('csv-batch-filter@example.com');
+    const food = await categoryNamed(token, 'Food');
+    const medical = await categoryNamed(token, 'Medical');
+
+    for (const [category, count] of [
+      [food, 600],
+      [medical, 600],
+    ] as const) {
+      await database.pool.query(
+        `INSERT INTO expenses (user_id, category_id, total_cents, purchased_on)
+         SELECT $1, $2, 100 + i, DATE '2020-01-01' + (i % 5)
+         FROM generate_series(1, ${count}) AS i`,
+        [userId, category],
+      );
+    }
+
+    const rows = records((await exportWith(token, `categoryId=${food}`)).body).slice(1);
+
+    // A filter dropped on the second batch would return 1,200.
+    expect(rows.length).toBe(600);
+    expect(rows.every((row) => row.includes(food))).toBe(true);
+  });
+});
+
 describe('todayInMalaysia', () => {
   /**
    * The whole point of the helper. Just after midnight in Kuala Lumpur it is
