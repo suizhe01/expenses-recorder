@@ -2,7 +2,10 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { Database } from '../db.js';
 import { authenticatedUserId, requireAuth } from '../auth/guard.js';
-import { findLiveCategoryById } from '../categories/categories.js';
+import {
+  findLiveCategoryById,
+  findLiveCategoryIds,
+} from '../categories/categories.js';
 import { findLiveById } from '../receipts/receipts.js';
 import {
   findExpenseById,
@@ -162,6 +165,53 @@ const paramsSchema = z.object({
   id: uuidSchema,
 });
 
+/**
+ * EXP-18 AC-1 to AC-8. The filters `GET /expenses` accepts.
+ *
+ * Fastify parses a repeated key into an array and a single one into a string
+ * (verified, not assumed), so `categoryId` accepts both and normalises to an
+ * array — the store then treats one id and ten identically.
+ *
+ * `from` and `to` reuse `purchasedOnSchema` wholesale rather than restating its
+ * rules: same format, same real-calendar-date check, same rejection of the
+ * future via `todayInMalaysia` (AC-7). One implementation, so the filter and the
+ * write can never disagree about what a valid date is.
+ *
+ * Nothing here is a Fastify `querystring` schema (NG-4) — this is a zod parse
+ * inside the handler, so a bad parameter is answered by code that can choose its
+ * own status rather than by Fastify's validator.
+ */
+const categoryIdFilterSchema = z
+  .union([uuidSchema, z.array(uuidSchema)])
+  .transform((value) => (Array.isArray(value) ? value : [value]));
+
+const querySchema = z
+  .object({
+    from: purchasedOnSchema.optional(),
+    to: purchasedOnSchema.optional(),
+    categoryId: categoryIdFilterSchema.optional(),
+    hasReceipt: z
+      .enum(['true', 'false'], {
+        // Reached by `hasReceipt=maybe` and by `hasReceipt=` alike.
+        message: "must be 'true' or 'false'",
+      })
+      .transform((value) => value === 'true')
+      .optional(),
+  })
+  // AC-8. Both parameters are named because either could be the typo, and a
+  // client showing "from: ..." against one field only would hide half the fix.
+  .superRefine((value, context) => {
+    if (value.from !== undefined && value.to !== undefined && value.from > value.to) {
+      for (const path of ['from', 'to'] as const) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [path],
+          message: 'from must not be later than to',
+        });
+      }
+    }
+  });
+
 function fieldErrors(error: z.ZodError): Record<string, string> {
   return Object.fromEntries(
     error.issues.map((issue) => [issue.path.join('.'), issue.message]),
@@ -269,17 +319,62 @@ export function registerExpenseRoutes(
     schema: {
       tags: ['Expenses'],
       summary: 'List live expenses, newest purchase first',
+      // EXP-18 AC-13. The parameters are described here in prose rather than as a
+      // `querystring` schema, which is banned repo-wide: it would switch on
+      // Fastify request validation and answer 400 before any handler runs.
       description:
         'Ordered by purchase date descending, ties broken by when the expense was '
-        + 'recorded. Deliberately unfiltered and unpaginated; that arrives with export.',
+        + 'recorded. Still unpaginated.\n\n'
+        + 'Four optional query parameters, combined with AND:\n\n'
+        + '- `from` and `to` — `YYYY-MM-DD`, filtering `purchasedOn`. **Both bounds are '
+        + 'inclusive**, so an expense dated exactly `from` or exactly `to` is returned. '
+        + 'Either may be given alone; omit `to` for an open-ended upper bound, which is '
+        + 'the only way to express "everything from here onwards" because a date in the '
+        + 'future is rejected.\n'
+        + '- `categoryId` — repeat the key to filter by several categories '
+        + '(`?categoryId=a&categoryId=b`). An unknown, soft-deleted, or other '
+        + "account's id answers 422.\n"
+        + '- `hasReceipt` — `true` for expenses with a receipt attached, `false` for '
+        + 'those without. Omit for no filter; no other value is accepted.\n\n'
+        + 'A malformed parameter answers 400 naming it. Filters are never silently '
+        + 'ignored, because a dropped `from` would return everything while looking like '
+        + 'a successful narrow query.',
       security: [{ bearerAuth: [] }],
       response: {
         200: { type: 'array', items: expenseResponse },
+        400: expenseValidationError,
         401: expenseError,
+        422: expenseError,
       },
     },
   }, async (request, reply) => {
-    const rows = await listExpenses(database.pool, authenticatedUserId(request));
+    const parsed = querySchema.safeParse(request.query);
+
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: 'Validation failed', fields: fieldErrors(parsed.error) });
+    }
+
+    const userId = authenticatedUserId(request);
+    const { from, to, categoryId: categoryIds, hasReceipt } = parsed.data;
+
+    // AC-9. Checked before the list query, so filtering by something that cannot
+    // match is reported rather than answered with a plausible empty array.
+    if (categoryIds !== undefined) {
+      const live = await findLiveCategoryIds(database.pool, userId, categoryIds);
+
+      if (categoryIds.some((id) => !live.has(id))) {
+        return reply.code(422).send(CATEGORY_NOT_FOUND);
+      }
+    }
+
+    const rows = await listExpenses(database.pool, userId, {
+      from,
+      to,
+      categoryIds,
+      hasReceipt,
+    });
 
     return reply.code(200).send(rows.map(toExpense));
   });

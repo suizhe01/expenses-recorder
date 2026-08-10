@@ -138,17 +138,70 @@ function entriesOf(input: ExpenseInput): Entry[] {
   return Object.entries(input).filter(([, value]) => value !== undefined) as Entry[];
 }
 
-/** AC-11. Live expenses only, newest purchase first. */
+/**
+ * EXP-18. Every filter is optional and they combine with AND (AC-5).
+ *
+ * `from`/`to` are `YYYY-MM-DD` strings, compared as dates in SQL — never parsed
+ * into a JavaScript Date (AC-10). That is the EXP-17 lesson: a `date` becomes a
+ * Date at *local* midnight, so anything that routes a date-only value through JS
+ * shifts it by a day east of UTC.
+ */
+export type ExpenseFilters = {
+  from?: string;
+  to?: string;
+  categoryIds?: string[];
+  hasReceipt?: boolean;
+};
+
+/**
+ * AC-11 and AC-1. Live expenses only, newest purchase first. With no filters the
+ * query is the one this function has always run.
+ *
+ * The user scope and the soft-delete predicate are seeded first and unconditional,
+ * so no filter combination can widen the result past one account's live rows —
+ * a filter must never become a way around the scope.
+ */
 export async function listExpenses(
   executor: Executor,
   userId: string,
+  filters: ExpenseFilters = {},
 ): Promise<ExpenseRow[]> {
+  const conditions = ['e.user_id = $1', 'e.deleted_at IS NULL'];
+  const parameters: (string | string[])[] = [userId];
+
+  // AC-2: both bounds inclusive, so an expense dated exactly `from` or exactly
+  // `to` is returned. `::date` casts the parameter, not the column, so the index
+  // on (user_id, purchased_on DESC) stays usable.
+  if (filters.from !== undefined) {
+    parameters.push(filters.from);
+    conditions.push(`e.purchased_on >= $${parameters.length}::date`);
+  }
+
+  if (filters.to !== undefined) {
+    parameters.push(filters.to);
+    conditions.push(`e.purchased_on <= $${parameters.length}::date`);
+  }
+
+  // AC-3: one id or many, the same way.
+  if (filters.categoryIds !== undefined) {
+    parameters.push(filters.categoryIds);
+    conditions.push(`e.category_id = ANY($${parameters.length}::uuid[])`);
+  }
+
+  // AC-4. The only branch that adds SQL rather than a parameter — and it picks
+  // between two fixed fragments, so nothing from the request reaches the string.
+  if (filters.hasReceipt !== undefined) {
+    conditions.push(
+      filters.hasReceipt ? 'e.receipt_id IS NOT NULL' : 'e.receipt_id IS NULL',
+    );
+  }
+
   const { rows } = await executor.query<ExpenseRow>(
     `SELECT ${PROJECTION}
      ${FROM_EXPENSES}
-     WHERE e.user_id = $1 AND e.deleted_at IS NULL
+     WHERE ${conditions.join(' AND ')}
      ORDER BY e.purchased_on DESC, e.created_at DESC, e.id DESC`,
-    [userId],
+    parameters,
   );
 
   return rows;
