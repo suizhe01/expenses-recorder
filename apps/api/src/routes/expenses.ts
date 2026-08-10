@@ -7,6 +7,7 @@ import {
   findLiveCategoryIds,
 } from '../categories/categories.js';
 import { findLiveById } from '../receipts/receipts.js';
+import { fieldErrors } from '../validation.js';
 import {
   findExpenseById,
   insertExpense,
@@ -198,6 +199,19 @@ const querySchema = z
       .transform((value) => value === 'true')
       .optional(),
   })
+  // EXP-19 AC-6. Strict, so a misspelled or bracket-syntax filter is refused
+  // rather than dropped. Ignoring `?catgeoryId=x` returned an unfiltered list
+  // with a 200 — indistinguishable from a successful narrow query, which is the
+  // failure EXP-18's 400-rather-than-ignore rule exists to prevent.
+  //
+  // Called on the object and BEFORE `superRefine`, which returns a ZodEffects
+  // that has no `.strict`.
+  //
+  // Scoped to this route on purpose (NG-2): `/auth/verify` and
+  // `/auth/reset-password` also parse query strings, and their URLs arrive by
+  // email — strictness there would break a valid link the moment a mail client
+  // appended a tracking parameter.
+  .strict()
   // AC-8. Both parameters are named because either could be the typo, and a
   // client showing "from: ..." against one field only would hide half the fix.
   .superRefine((value, context) => {
@@ -212,11 +226,6 @@ const querySchema = z
     }
   });
 
-function fieldErrors(error: z.ZodError): Record<string, string> {
-  return Object.fromEntries(
-    error.issues.map((issue) => [issue.path.join('.'), issue.message]),
-  );
-}
 
 /**
  * EXP-11. Documentation only — no `body`, `querystring`, or `params` schema, for

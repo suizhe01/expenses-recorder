@@ -17,6 +17,7 @@ import {
   verifyPassword,
 } from '../auth/password.js';
 import { seedDefaultCategories } from '../categories/categories.js';
+import { fieldErrors } from '../validation.js';
 import {
   createSession,
   findSessionByToken,
@@ -95,11 +96,6 @@ type UserRow = {
  */
 const INVALID_CREDENTIALS = { error: 'Invalid email or password' } as const;
 
-function fieldErrors(error: z.ZodError): Record<string, string> {
-  return Object.fromEntries(
-    error.issues.map((issue) => [issue.path.join('.'), issue.message]),
-  );
-}
 
 /**
  * EXP-11. Documentation only — `tags`, `summary`, `security` and `response`.

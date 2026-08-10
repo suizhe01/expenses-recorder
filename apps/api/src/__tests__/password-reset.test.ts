@@ -309,6 +309,31 @@ describe('GET /auth/reset-password', () => {
   });
 });
 
+/**
+ * EXP-19 NG-2. This route's query parsing is deliberately NOT strict, unlike
+ * `GET /expenses`.
+ *
+ * The URL arrives by email, and mail clients and link trackers append
+ * parameters. Strictness here would render "link no longer valid" for a user who
+ * clicked a perfectly good link — so the tolerance is a feature, and this is its
+ * guard.
+ */
+describe('EXP-19 NG-2: the reset form survives appended tracking parameters', () => {
+  it('opens with utm_source and fbclid alongside the token', async () => {
+    await account('tracked@example.com', true);
+    await forgot({ email: 'tracked@example.com' });
+    const token = tokenFromUrl(resets[0]!.resetUrl);
+
+    const response = await app.inject({
+      method: 'GET',
+      url: `/auth/reset-password?token=${token}&utm_source=mail&fbclid=abc123`,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).not.toContain('no longer valid');
+  });
+});
+
 describe('POST /auth/reset-password', () => {
   async function liveToken(email = 'known@example.com', verified = true) {
     await account(email, verified);
