@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -485,6 +485,140 @@ describe('GET /receipts', () => {
     await remove(token, id);
 
     await expect(list(token).then((r) => r.json())).resolves.toEqual([]);
+  });
+});
+
+/**
+ * EXP-17 — the extracted purchase date must survive the trip out of Postgres.
+ *
+ * `fakeFields.purchasedOn` was already `2026-01-14`, but only ever as *input* to
+ * the fake extractor; nothing asserted what came back. That gap is why a real
+ * off-by-one lived here through a green CI: `pg` hands back a `date` as a Date at
+ * local midnight, so reading it with `toISOString()` reported 2026-01-13 in any
+ * zone east of UTC and the correct day in UTC, which is where CI runs.
+ *
+ * These assertions are on the API response rather than on `toExtraction`, so they
+ * cover the serialiser and the response schema too.
+ */
+describe('EXP-17: the extracted purchase date', () => {
+  it('AC-2: round-trips exactly through the upload response', async () => {
+    const { token } = await account('date-upload@example.com');
+
+    const created = await upload(token, jpeg());
+
+    expect(created.statusCode).toBe(201);
+    const { extraction } = created.json() as {
+      extraction: { purchasedOn: string; purchasedAtTime: string };
+    };
+
+    expect(extraction.purchasedOn).toBe(fakeFields.purchasedOn);
+    // AC-6: a `time` column already arrives as a string and must be unaffected.
+    expect(extraction.purchasedAtTime).toBe(fakeFields.purchasedAtTime);
+  });
+
+  it('AC-2: round-trips exactly through GET /receipts', async () => {
+    const { token } = await account('date-list@example.com');
+    await upload(token, jpeg());
+
+    const [listed] = (await list(token)).json() as {
+      extraction: { purchasedOn: string; purchasedAtTime: string };
+    }[];
+
+    expect(listed!.extraction.purchasedOn).toBe(fakeFields.purchasedOn);
+    expect(listed!.extraction.purchasedAtTime).toBe(fakeFields.purchasedAtTime);
+  });
+
+  it('AC-2: reports whatever day the column holds, in this timezone', async () => {
+    const { token } = await account('date-boundary@example.com');
+
+    // A date whose local midnight falls on the previous day in UTC — the exact
+    // shape that produced the bug. Asserted against the column rather than the
+    // fixture, so this cannot pass by both sides being wrong together.
+    const extractor: ReceiptExtractor = {
+      model: 'fake-model',
+      extract: async () => ({
+        status: 'succeeded',
+        fields: { ...fakeFields, purchasedOn: '2026-08-08' },
+        promptTokens: 1,
+        outputTokens: 1,
+      }),
+    };
+    const scoped = buildApp({
+      config,
+      database,
+      emailTransport: silentTransport,
+      extractor,
+    });
+    await scoped.ready();
+
+    try {
+      const part = multipart(jpeg('boundary'));
+      const response = await scoped.inject({
+        method: 'POST',
+        url: '/receipts',
+        headers: { ...auth(token), ...part.headers },
+        payload: part.payload,
+      });
+
+      const body = response.json() as {
+        id: string;
+        extraction: { purchasedOn: string };
+      };
+      expect(body.extraction.purchasedOn).toBe('2026-08-08');
+
+      const { rows } = await database.pool.query<{ day: string }>(
+        `SELECT to_char(purchased_on, 'YYYY-MM-DD') AS day
+         FROM receipt_extractions WHERE receipt_id = $1`,
+        [body.id],
+      );
+      expect(rows[0]!.day).toBe('2026-08-08');
+    } finally {
+      await scoped.close();
+    }
+  });
+
+  /**
+   * AC-3's pinned timezone is what makes the assertions above able to fail. If
+   * the zone were ever unpinned back to UTC they would pass against the broken
+   * implementation, so the pin itself is worth asserting.
+   */
+  it('AC-3: the suite runs east of UTC', () => {
+    expect(new Date().getTimezoneOffset()).toBeLessThan(0);
+  });
+
+  /**
+   * AC-4. Survives someone deciding the pinned zone is inconvenient: this fails
+   * in every timezone, including UTC.
+   */
+  it('AC-4: every date column is converted in SQL, not through a Date', async () => {
+    for (const file of ['../receipts/extraction-store.ts', '../expenses/expenses.ts']) {
+      const source = await readFile(new URL(file, import.meta.url), 'utf8');
+
+      // Comments are stripped first. Both files explain this bug at length, and
+      // that prose mentions `purchased_on` and `toISOString` within a few lines
+      // of each other — which made the first version of this test fail against a
+      // correct implementation. A guard that cries wolf gets deleted.
+      const code = source
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/\/\/.*$/gm, '');
+
+      expect(code, `${file} should convert its date column in SQL`).toContain(
+        'to_char(',
+      );
+
+      // Matches a Date method called directly ON the column — which is what the
+      // bug was: `row.purchased_on.toISOString().slice(0, 10)`.
+      //
+      // Deliberately narrow. A looser "purchased_on ... toISOString within the
+      // same statement" pattern matches the *correct* code, because `toExtraction`
+      // maps `purchased_on` and `created_at.toISOString()` inside one object
+      // literal. It would not catch someone aliasing the column to a variable
+      // first; the `to_char` assertion above and the round-trip tests are what
+      // cover that.
+      expect(code, `${file} reads a date column through a Date`).not.toMatch(
+        /purchased_on\s*\??\.\s*toISOString/,
+      );
+    }
   });
 });
 
