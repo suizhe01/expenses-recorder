@@ -27,6 +27,7 @@ import {
   toExtraction,
   type ExtractionRow,
 } from '../receipts/extraction-store.js';
+import { liveExpenseIdFor, liveExpenseIdsFor } from '../expenses/expenses.js';
 
 const paramsSchema = z.object({
   id: z.string().uuid(),
@@ -50,6 +51,11 @@ const UNSUPPORTED = {
  */
 const FILE_UNAVAILABLE = {
   error: 'Receipt image is temporarily unavailable',
+} as const;
+
+/** EXP-16 AC-18. The receipt is this user's, and an expense still needs it. */
+const RECEIPT_ATTACHED = {
+  error: 'Receipt is attached to an expense',
 } as const;
 
 /** AC-13. Applied to `POST /receipts` only, via that route's own config. */
@@ -114,6 +120,12 @@ const receiptResponse = {
     originalFilename: { type: ['string', 'null'] },
     createdAt: { type: 'string', format: 'date-time' },
     extraction: extractionResponse,
+    // EXP-16 AC-19. The live expense this receipt was confirmed into, or null
+    // when it is still waiting to be filed — which is what lets a client show an
+    // inbox of unconfirmed receipts. Declared here because the serialiser is an
+    // allowlist and would otherwise strip it silently, exactly as it did to
+    // `extraction` during EXP-15.
+    expenseId: { type: ['string', 'null'], format: 'uuid' },
   },
 } as const;
 
@@ -185,6 +197,11 @@ export function registerReceiptRoutes(
       database.pool,
       rows.map((row) => row.id),
     );
+    // EXP-16 AC-19. One query for the whole page rather than one per receipt.
+    const expenseIds = await liveExpenseIdsFor(
+      database.pool,
+      rows.map((row) => row.id),
+    );
 
     return reply.code(200).send(
       rows.map((row) => {
@@ -193,6 +210,7 @@ export function registerReceiptRoutes(
         return {
           ...toReceipt(row),
           extraction: extraction ? toExtraction(extraction) : null,
+          expenseId: expenseIds.get(row.id) ?? null,
         };
       }),
     );
@@ -279,6 +297,10 @@ export function registerReceiptRoutes(
       return reply.code(200).send({
         ...toReceipt(existing),
         extraction: extraction ? toExtraction(extraction) : null,
+        // EXP-16 AC-19. A re-upload of bytes already confirmed reports the
+        // expense holding them, so a client can tell "already filed" from
+        // "still in the inbox" without a second call.
+        expenseId: await liveExpenseIdFor(database.pool, existing.id),
       });
     }
 
@@ -301,7 +323,10 @@ export function registerReceiptRoutes(
       const winner = await findLiveByHash(database.pool, userId, file.sha256);
 
       if (winner) {
-        return reply.code(200).send(toReceipt(winner));
+        return reply.code(200).send({
+          ...toReceipt(winner),
+          expenseId: await liveExpenseIdFor(database.pool, winner.id),
+        });
       }
 
       return reply.code(409).send({ error: 'Receipt could not be stored' });
@@ -320,6 +345,10 @@ export function registerReceiptRoutes(
     return reply.code(201).send({
       ...toReceipt(outcome.receipt),
       extraction: extraction ? toExtraction(extraction) : null,
+      // EXP-16 AC-19. Always null: the receipt was created a moment ago and
+      // nothing can have confirmed it yet. Stated rather than omitted so the
+      // field is present on every receipt payload.
+      expenseId: null,
     });
   });
 
@@ -394,7 +423,8 @@ export function registerReceiptRoutes(
       summary: 'Soft delete a receipt',
       description:
         'The row is marked deleted and the file is never removed from disk. Deleting '
-        + 'twice answers 404.',
+        + 'twice answers 404. A receipt attached to a live expense answers 409 and is '
+        + 'not deleted; detach or delete that expense first.',
       security: [{ bearerAuth: [] }],
     },
   }, async (request, reply) => {
@@ -404,10 +434,30 @@ export function registerReceiptRoutes(
       return reply.code(404).send(NOT_FOUND);
     }
 
+    const userId = authenticatedUserId(request);
+
+    // EXP-16 AC-18. Ownership is settled FIRST, so a receipt belonging to
+    // somebody else answers 404 whether or not they have confirmed it. Checking
+    // attachment first would answer 409 for another account's receipt and turn
+    // this route into an oracle for which ids are real.
+    const own = await findLiveById(database.pool, userId, params.data.id);
+
+    if (!own) {
+      return reply.code(404).send(NOT_FOUND);
+    }
+
+    // Refusing rather than cascading: an expense is a tax record and this
+    // receipt is the document that proves it. Letting the image disappear from
+    // under it would defeat the point of keeping receipts at all. Detaching or
+    // deleting the expense first is the way through.
+    if (await liveExpenseIdFor(database.pool, params.data.id)) {
+      return reply.code(409).send(RECEIPT_ATTACHED);
+    }
+
     // AC-10: the row is marked deleted; the file stays exactly where it is.
     const outcome = await softDeleteReceipt(
       database.pool,
-      authenticatedUserId(request),
+      userId,
       params.data.id,
     );
 
