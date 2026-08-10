@@ -104,6 +104,34 @@ export async function findLiveCategoryById(
   return rows[0];
 }
 
+/**
+ * EXP-18 AC-9. Which of the given ids are live categories of this user's.
+ *
+ * One query for any number of ids rather than a loop over
+ * `findLiveCategoryById`, so a filter naming ten categories still costs one
+ * round trip. The caller compares the result against what it asked for: any id
+ * missing from this set is unknown, another account's, or soft-deleted, and all
+ * three must be indistinguishable.
+ */
+export async function findLiveCategoryIds(
+  executor: Executor,
+  userId: string,
+  ids: string[],
+): Promise<Set<string>> {
+  if (ids.length === 0) {
+    return new Set();
+  }
+
+  const { rows } = await executor.query<{ id: string }>(
+    `SELECT id
+     FROM categories
+     WHERE id = ANY($1::uuid[]) AND user_id = $2 AND deleted_at IS NULL`,
+    [ids, userId],
+  );
+
+  return new Set(rows.map((row) => row.id));
+}
+
 export type CreateOutcome =
   | { status: 'created'; category: CategoryRow }
   | { status: 'conflict' };

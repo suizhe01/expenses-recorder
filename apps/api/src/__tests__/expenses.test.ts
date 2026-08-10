@@ -649,6 +649,296 @@ describe('GET /expenses', () => {
   });
 });
 
+/**
+ * EXP-18 — filtering the list. The contract the CSV and ZIP exports reuse, which
+ * is why a wrong answer here would be copied into both.
+ */
+describe('EXP-18: GET /expenses filters', () => {
+  function listWith(token: string, query: string) {
+    return app.inject({
+      method: 'GET',
+      url: `/expenses?${query}`,
+      headers: auth(token),
+    });
+  }
+
+  function dates(response: { json: () => unknown }): string[] {
+    return (response.json() as Expense[]).map((expense) => expense.purchasedOn);
+  }
+
+  /** The five expenses the issue's manual steps use. */
+  async function fixture(token: string) {
+    const food = await categoryNamed(token, 'Food');
+    const medical = await categoryNamed(token, 'Medical');
+    const withReceipt = await upload(token, 'has-one');
+    const alsoWithReceipt = await upload(token, 'has-two');
+
+    // Created oldest-first so the ordering assertions exercise real ties.
+    await anExpense(token, { purchasedOn: '2026-06-15', categoryId: food });
+    await anExpense(token, {
+      purchasedOn: '2026-07-01',
+      categoryId: medical,
+      receiptId: withReceipt,
+    });
+    await anExpense(token, { purchasedOn: '2026-07-31', categoryId: food });
+    await anExpense(token, {
+      purchasedOn: '2026-08-01',
+      categoryId: medical,
+      receiptId: alsoWithReceipt,
+    });
+    await anExpense(token, { purchasedOn: '2026-08-08', categoryId: food });
+
+    return { food, medical };
+  }
+
+  it('AC-1: no parameters returns every expense, newest purchase first', async () => {
+    const { token } = await account('filter-none@example.com');
+    await fixture(token);
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/expenses',
+      headers: auth(token),
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(dates(response)).toEqual([
+      '2026-08-08',
+      '2026-08-01',
+      '2026-07-31',
+      '2026-07-01',
+      '2026-06-15',
+    ]);
+  });
+
+  /**
+   * AC-2, and the test this issue most needed. Both bounds are inclusive, so the
+   * expenses dated exactly on the boundaries are in and the ones a single day
+   * outside are out. A strict comparison passes every other filter test in this
+   * file and fails only this one.
+   */
+  it('AC-2: both date bounds are inclusive', async () => {
+    const { token } = await account('filter-boundary@example.com');
+    await fixture(token);
+
+    const response = await listWith(token, 'from=2026-07-01&to=2026-07-31');
+
+    expect(response.statusCode).toBe(200);
+    expect(dates(response)).toEqual(['2026-07-31', '2026-07-01']);
+  });
+
+  it('AC-2: either bound may be given alone', async () => {
+    const { token } = await account('filter-open@example.com');
+    await fixture(token);
+
+    // Omitting `to` is the documented way to say "everything from here onwards",
+    // because AC-7 refuses a future upper bound.
+    expect(dates(await listWith(token, 'from=2026-08-01'))).toEqual([
+      '2026-08-08',
+      '2026-08-01',
+    ]);
+    expect(dates(await listWith(token, 'to=2026-06-30'))).toEqual(['2026-06-15']);
+  });
+
+  it('AC-3: one categoryId, and several as a union', async () => {
+    const { token } = await account('filter-category@example.com');
+    const { food, medical } = await fixture(token);
+
+    expect(dates(await listWith(token, `categoryId=${medical}`))).toEqual([
+      '2026-08-01',
+      '2026-07-01',
+    ]);
+    expect(
+      dates(await listWith(token, `categoryId=${medical}&categoryId=${food}`)),
+    ).toHaveLength(5);
+  });
+
+  it('AC-4: hasReceipt separates documented expenses from undocumented ones', async () => {
+    const { token } = await account('filter-receipt@example.com');
+    await fixture(token);
+
+    expect(dates(await listWith(token, 'hasReceipt=true'))).toEqual([
+      '2026-08-01',
+      '2026-07-01',
+    ]);
+    expect(dates(await listWith(token, 'hasReceipt=false'))).toEqual([
+      '2026-08-08',
+      '2026-07-31',
+      '2026-06-15',
+    ]);
+  });
+
+  it('AC-5: filters combine with AND', async () => {
+    const { token } = await account('filter-combined@example.com');
+    const { food } = await fixture(token);
+
+    const response = await listWith(
+      token,
+      `from=2026-07-01&categoryId=${food}&hasReceipt=false`,
+    );
+
+    expect(dates(response)).toEqual(['2026-08-08', '2026-07-31']);
+  });
+
+  it('AC-6: a malformed parameter answers 400 naming it', async () => {
+    const { token } = await account('filter-malformed@example.com');
+    await fixture(token);
+
+    const cases: [string, string][] = [
+      ['from=yesterday', 'from'],
+      ['from=2026-13-01', 'from'],
+      ['to=2026-02-30', 'to'],
+      ['to=01-08-2026', 'to'],
+      ['categoryId=not-a-uuid', 'categoryId'],
+      ['hasReceipt=maybe', 'hasReceipt'],
+      ['hasReceipt=1', 'hasReceipt'],
+      // An empty value is not a valid date, and treating it as absent would
+      // silently widen the result.
+      ['from=', 'from'],
+    ];
+
+    for (const [query, field] of cases) {
+      const response = await listWith(token, query);
+
+      expect(response.statusCode, query).toBe(400);
+      expect(fields(response), query).toHaveProperty(field);
+    }
+  });
+
+  it('AC-7: a future bound is refused on either end', async () => {
+    const { token } = await account('filter-future@example.com');
+
+    const from = await listWith(token, 'from=2099-01-01');
+    expect(from.statusCode).toBe(400);
+    expect(fields(from)).toHaveProperty('from');
+
+    const to = await listWith(token, 'to=2099-01-01');
+    expect(to.statusCode).toBe(400);
+    expect(fields(to)).toHaveProperty('to');
+  });
+
+  it('AC-8: a backwards range answers 400 naming both bounds', async () => {
+    const { token } = await account('filter-backwards@example.com');
+
+    const response = await listWith(token, 'from=2026-08-01&to=2026-07-01');
+
+    expect(response.statusCode).toBe(400);
+    expect(fields(response)).toHaveProperty('from');
+    expect(fields(response)).toHaveProperty('to');
+  });
+
+  it('AC-8: an equal from and to is a valid single day', async () => {
+    const { token } = await account('filter-oneday@example.com');
+    await fixture(token);
+
+    expect(dates(await listWith(token, 'from=2026-07-31&to=2026-07-31'))).toEqual([
+      '2026-07-31',
+    ]);
+  });
+
+  it("AC-9: unknown, deleted, and another account's category all answer one 422", async () => {
+    const mine = await account('filter-cat-mine@example.com');
+    const theirs = await account('filter-cat-theirs@example.com');
+    await fixture(mine.token);
+
+    const theirCategory = await categoryNamed(theirs.token, 'Food');
+    const doomed = await categoryNamed(mine.token, 'Shopping');
+    await app.inject({
+      method: 'DELETE',
+      url: `/categories/${doomed}`,
+      headers: auth(mine.token),
+    });
+
+    const unknown = await listWith(mine.token, `categoryId=${UNKNOWN_ID}`);
+    const other = await listWith(mine.token, `categoryId=${theirCategory}`);
+    const deleted = await listWith(mine.token, `categoryId=${doomed}`);
+
+    expect(unknown.statusCode).toBe(422);
+    expect(unknown.json()).toEqual({ error: 'Category not found' });
+    for (const response of [other, deleted]) {
+      expect(response.statusCode).toBe(422);
+      expect(response.body).toBe(unknown.body);
+    }
+  });
+
+  it('AC-9: one bad id among several fails the whole request', async () => {
+    const { token } = await account('filter-cat-mixed@example.com');
+    const { food } = await fixture(token);
+
+    const response = await listWith(
+      token,
+      `categoryId=${food}&categoryId=${UNKNOWN_ID}`,
+    );
+
+    expect(response.statusCode).toBe(422);
+    expect(response.json()).toEqual({ error: 'Category not found' });
+  });
+
+  it('AC-12: a combination matching nothing answers 200 and an empty array', async () => {
+    const { token } = await account('filter-empty@example.com');
+    await fixture(token);
+
+    const response = await listWith(token, 'from=2020-01-01&to=2020-12-31');
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual([]);
+  });
+
+  /**
+   * AC-11. The user scope and the soft-delete predicate are unconditional, so no
+   * filter can reach past them. Worth asserting rather than assuming: a filter
+   * that widened the scope would be a data leak, not a bug.
+   */
+  it("AC-11: filters never reach another account's expenses", async () => {
+    const mine = await account('filter-scope-mine@example.com');
+    const theirs = await account('filter-scope-theirs@example.com');
+    await fixture(theirs.token);
+    await fixture(mine.token);
+
+    const theirCategories = (await categories(theirs.token)).map((c) => c.id);
+    const query = theirCategories.map((id) => `categoryId=${id}`).join('&');
+
+    // Their category ids are not mine, so this is 422 rather than a window into
+    // their data.
+    expect((await listWith(mine.token, query)).statusCode).toBe(422);
+
+    // And a wide date range still only ever returns mine.
+    const wide = await listWith(mine.token, 'from=2026-01-01');
+    expect(dates(wide)).toHaveLength(5);
+  });
+
+  it('AC-11: soft-deleted expenses stay excluded under every filter', async () => {
+    const { token } = await account('filter-deleted@example.com');
+    const { food } = await fixture(token);
+
+    const [newest] = (await listWith(token, `categoryId=${food}`)).json() as Expense[];
+    await remove(token, newest!.id);
+
+    expect(dates(await listWith(token, `categoryId=${food}`))).toEqual([
+      '2026-07-31',
+      '2026-06-15',
+    ]);
+    expect(dates(await listWith(token, 'from=2026-08-01'))).toEqual(['2026-08-01']);
+    expect(dates(await listWith(token, 'hasReceipt=false'))).toEqual([
+      '2026-07-31',
+      '2026-06-15',
+    ]);
+  });
+
+  it('AC-10: the date filter is applied in SQL, never through a JS Date', async () => {
+    const source = await readFile(
+      new URL('../expenses/expenses.ts', import.meta.url),
+      'utf8',
+    );
+    const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+
+    expect(code).toContain('purchased_on >=');
+    expect(code).toContain('purchased_on <=');
+    expect(code).toContain('::date');
+    expect(code).not.toMatch(/new Date\(/);
+  });
+});
+
 describe('GET /expenses/:id', () => {
   it('AC-13: returns one expense', async () => {
     const { token } = await account('one@example.com');
