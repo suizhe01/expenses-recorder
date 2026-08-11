@@ -189,7 +189,7 @@ export function buildApp({
   // these routes stay OUTSIDE the 10/min auth budget, which is sized for
   // unauthenticated login attempts rather than for someone filing receipts.
   app.register(async (scope) => {
-    registerExpenseRoutes(scope, { database });
+    registerExpenseRoutes(scope, { config, database });
   });
 
   // EXP-13: receipts get their own scope for the same reason — the guard is a
