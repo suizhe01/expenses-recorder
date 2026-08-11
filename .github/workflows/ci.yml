@@ -113,6 +113,23 @@ jobs:
       - name: Test (mobile)
         run: npm run test --workspace apps/mobile
 
+      # EXP-25 AC-10. The web workspace joins the same required check. It needs
+      # no database and no browser: the transport and storage are injected, so
+      # nothing here touches the network.
+      - name: Lint (web)
+        run: npm run lint --workspace apps/web
+
+      - name: Typecheck (web)
+        run: npm run typecheck --workspace apps/web
+
+      - name: Test (web)
+        run: npm run test --workspace apps/web
+
+      # The build is what the production image runs, and a type error in a
+      # test file fails it — worth catching here rather than in a Docker layer.
+      - name: Build (web)
+        run: npm run build --workspace apps/web
+
       - name: Migrate down
         run: npm run migrate:down --workspace apps/api
 

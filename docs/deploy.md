@@ -137,6 +137,14 @@ to. On 2 OCPU expect a few minutes the first time.
 docker compose -f docker-compose.prod.yml build
 ```
 
+**This builds the web app too.** The API serves it from its own origin, so
+there is one hostname for everything and no CORS. The build stage compiles
+`apps/web` and copies the output beside the API's; the toolchain — Vite,
+Tailwind, TypeScript — stays out of the runtime image. Nothing extra to run.
+
+If you ever see the API answer 404 at `/` while `/health` works, the web build
+is missing from the image — rebuild rather than adding a route.
+
 ---
 
 ## 7. Run migrations — explicitly, before any traffic
@@ -306,10 +314,13 @@ The drill is only passed when **both** halves check out:
 ```bash
 cd expenses-recorder
 git pull
-docker compose -f docker-compose.prod.yml build
+docker compose -f docker-compose.prod.yml build   # rebuilds the API and the web app
 docker compose -f docker-compose.prod.yml run --rm api npm run migrate
 docker compose -f docker-compose.prod.yml up -d
 ```
+
+The web build is part of the image, so a front-end change reaches users only
+after `build` — a `git pull` alone changes nothing that is being served.
 
 Take a backup first if the release contains migrations. Migrations are not
 reversible in practice even where a `down` exists.
@@ -328,6 +339,14 @@ database, restore the pre-upgrade backup instead — that is what it is for.
 ---
 
 ## 14. Known limits
+
+- **The app and the API share one origin.** `https://<host>.ts.net/` is the web
+  app; `/auth`, `/expenses`, `/receipts`, `/categories`, `/health` and `/docs`
+  belong to the API. Unknown paths under those prefixes answer a JSON 404;
+  anything else falls back to the app so a deep link survives a refresh. A new
+  top-level API prefix must be added to `API_PREFIXES` in `apps/api/src/web.ts`
+  **and** to the proxy list in `apps/web/vite.config.ts`, or development and
+  production will disagree about who owns the path.
 
 - **`/docs` is not served.** Swagger UI is development-only; on a public
   hostname it would hand anyone who found it a complete map of the auth

@@ -16,6 +16,7 @@ import { registerCategoryRoutes } from './routes/categories.js';
 import { registerReceiptRoutes } from './routes/receipts.js';
 import { registerExpenseRoutes } from './routes/expenses.js';
 import { documentRequests } from './openapi/transform.js';
+import { registerWebApp } from './web.js';
 import { createConsoleTransport, type EmailTransport } from './email/transport.js';
 import { createResendTransport } from './email/resend.js';
 import {
@@ -274,6 +275,21 @@ export function buildApp({
       emailTransport: transport,
     });
   });
+
+  // EXP-25 AC-7. Last, so every API route is already registered and the
+  // fallback can only ever see paths nothing else claimed. Does nothing when
+  // there is no build on disk.
+  //
+  // Never under test. The SPA fallback deliberately answers unknown non-API
+  // paths with index.html, which changes what `/__test/nowhere` returns — and
+  // EXP-14 AC-3 asserts that an unknown route is a 404. Left ungated, whether
+  // this suite passes would depend on whether someone happened to have built
+  // the web app on that machine, which is a worse problem than the assertion
+  // it breaks. The API's tests exercise the API; the fallback has its own
+  // tests in web.test.ts, and the real stack is verified in the runbook.
+  if (config.NODE_ENV !== 'test') {
+    registerWebApp(app);
+  }
 
   return app;
 }
