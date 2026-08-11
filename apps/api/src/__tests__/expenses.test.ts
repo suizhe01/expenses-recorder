@@ -2072,6 +2072,102 @@ describe('EXP-21: GET /expenses/export.zip', () => {
     expect(file.statusCode).toBe(503);
   });
 
+  /**
+   * AC-17, and the reason this pair exists.
+   *
+   * yazl reports failures in two places that `pipeline(outputStream, …)` does
+   * not observe, and an unhandled `error` event **terminates the Node process**
+   * rather than the download. Both were reproduced before the listeners were
+   * added, and both tests below take the whole vitest worker down without them
+   * — a crashed worker is the failure signal, which is exactly the severity
+   * being guarded against.
+   */
+  it('AC-17: survives a file that cannot be read once the archive is pumping', async () => {
+    const { token, userId } = await account('zip-unreadable@example.com');
+    const receiptId = 'dddddddd-0000-4000-8000-000000000001';
+    const sha256 = createHash('sha256').update(jpeg('unreadable')).digest('hex');
+
+    // A DIRECTORY where the bytes should be. `fileIsPresent` uses access(R_OK),
+    // which succeeds for a directory, so the presence pass calls it present and
+    // yazl then fails with "not a file" while pumping — the same code path a
+    // file vanishing mid-export takes, but deterministic rather than a race.
+    await mkdir(join(root, userId, sha256), { recursive: true });
+    await database.pool.query(
+      `INSERT INTO receipts (id, user_id, sha256, byte_size, content_type)
+       VALUES ($1, $2, $3, $4, 'image/jpeg')`,
+      [receiptId, userId, sha256, 68],
+    );
+    await anExpense(token, { purchasedOn: '2026-06-01', receiptId });
+
+    // The transfer fails rather than completing. Under `inject` that surfaces
+    // as a rejection, because destroying light-my-request's mock response
+    // propagates the error into its promise; over a real socket the client
+    // simply gets a truncated download, which is AC-17's intent either way.
+    await expect(exportZip(token)).rejects.toThrow(/not a file/);
+
+    // The point of the test: the process is still here to answer. Without the
+    // error listeners this line is never reached, because the unhandled event
+    // takes the worker down with it.
+    const health = await app.inject({ method: 'GET', url: '/health' });
+    expect(health.statusCode).toBe(200);
+  });
+
+  it('AC-17: survives the database failing part-way through the CSV', async () => {
+    const { token } = await account('zip-db-fails@example.com');
+    await anExpense(token, { purchasedOn: '2026-06-01' });
+
+    // The presence pass and the CSV pass each run one page query. Failing the
+    // second reproduces a database hiccup after the 200 has been sent, which is
+    // the exact scenario AC-17 describes — and it lands on the stream handed to
+    // yazl, which the `archive` listener alone does not cover.
+    let pageQueries = 0;
+    const flaky = {
+      ...database,
+      pool: {
+        ...database.pool,
+        query: ((text: string, values: unknown[]) => {
+          if (typeof text === 'string' && text.includes('created_at_text')) {
+            pageQueries += 1;
+
+            if (pageQueries > 1) {
+              return Promise.reject(new Error('pg: connection terminated'));
+            }
+          }
+
+          return database.pool.query(text, values as never);
+        }) as typeof database.pool.query,
+      },
+    } as Database;
+
+    const failing = buildApp({
+      config,
+      database: flaky,
+      emailTransport: silentTransport,
+      extractor: skippingExtractor,
+    });
+    await failing.ready();
+
+    try {
+      // Truncated rather than a well-formed archive that is silently short.
+      await expect(
+        failing.inject({
+          method: 'GET',
+          url: '/expenses/export.zip',
+          headers: auth(token),
+        }),
+      ).rejects.toThrow(/connection terminated/);
+
+      // The failure really did land on the second pass, after the 200.
+      expect(pageQueries).toBeGreaterThan(1);
+
+      // Still alive — this is the assertion the missing listener defeats.
+      const health = await failing.inject({ method: 'GET', url: '/health' });
+      expect(health.statusCode).toBe(200);
+    } finally {
+      await failing.close();
+    }
+  });
+
   it('AC-16: an export matching nothing is a valid archive with the header alone', async () => {
     const { token } = await account('zip-empty@example.com');
 

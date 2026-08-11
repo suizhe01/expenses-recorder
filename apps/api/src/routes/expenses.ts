@@ -856,14 +856,53 @@ export function registerExpenseRoutes(
     // AC-3 and AC-4. The ledger first, as a stream: the CSV is regenerated from
     // a second pass rather than buffered, and `cellFor` supplies the 19th column
     // that the pass above resolved.
-    archive.addReadStream(
-      Readable.from(
-        csvRecords(userId, filters, (row) => cellFor.get(row.id) ?? ''),
-        { objectMode: false },
-      ),
-      CSV_ENTRY_NAME,
-      { compress: false, mtime: new Date() },
+    const ledger = Readable.from(
+      csvRecords(userId, filters, (row) => cellFor.get(row.id) ?? ''),
+      { objectMode: false },
     );
+
+    /**
+     * AC-17. **Both** of these are required, and neither is redundant.
+     *
+     * `pipeline` below instruments only `archive.outputStream`, and yazl reports
+     * failures in two other places — so without these listeners an
+     * `ERR_UNHANDLED_ERROR` reaches the top level and **kills the process**,
+     * taking out every other request rather than truncating this one download.
+     * Both paths were reproduced.
+     *
+     * - `archive` — yazl emits on the ZipFile itself when `addFile` cannot stat
+     *   or read a path. Reached whenever a receipt file disappears between the
+     *   presence pass above and the pump below, which is exactly the restored-
+     *   without-its-volume case this feature is built around.
+     * - `ledger` — yazl attaches no error listener to a stream handed to
+     *   `addReadStream`, so a database failure part-way through the CSV lands
+     *   unhandled on the Readable. The `archive` listener does **not** cover
+     *   this one.
+     *
+     * Destroying `outputStream` is what converts either into a `pipeline`
+     * rejection, so the single catch below stays the one place that logs and
+     * destroys the socket.
+     *
+     * `GET /expenses/export.csv` needs none of this: there the generator is
+     * handed straight to `pipeline`, which instruments its own source. The
+     * difference is that here the stream goes to yazl instead.
+     */
+    // yazl types `outputStream` as the minimal `NodeJS.ReadableStream`, which
+    // has no `destroy`. It is a real `Readable` at run time — that is what
+    // `pipeline` consumes below.
+    const output = archive.outputStream as Readable;
+
+    const abort = (error: Error): void => {
+      output.destroy(error);
+    };
+
+    archive.on('error', abort);
+    ledger.on('error', abort);
+
+    archive.addReadStream(ledger, CSV_ENTRY_NAME, {
+      compress: false,
+      mtime: new Date(),
+    });
 
     // AC-5, AC-12, AC-14. `addFile` opens each path only when its turn comes, so
     // twenty thousand entries are twenty thousand sequential opens rather than
@@ -901,7 +940,7 @@ export function registerExpenseRoutes(
     });
 
     try {
-      await pipeline(archive.outputStream, reply.raw);
+      await pipeline(output, reply.raw);
     } catch (error) {
       // AC-17. The central directory is written last, so a destroyed connection
       // leaves an archive that fails to open — which is the honest outcome. An
