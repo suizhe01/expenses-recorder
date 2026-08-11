@@ -1,15 +1,19 @@
 import type { FastifyInstance } from 'fastify';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
+import { ZipFile } from 'yazl';
 import { z } from 'zod';
+import type { Config } from '../config.js';
 import type { Database } from '../db.js';
 import { BOM, centsCell, csvRow, plainCell, textCell, timestampCell } from '../csv.js';
+import { entryName, uniqueEntryName } from '../zip.js';
 import { authenticatedUserId, requireAuth } from '../auth/guard.js';
 import {
   findLiveCategoryById,
   findLiveCategoryIds,
 } from '../categories/categories.js';
-import { findLiveById } from '../receipts/receipts.js';
+import { findLiveById, findReceiptFilesByIds } from '../receipts/receipts.js';
+import { fileIsPresent, filePath } from '../receipts/storage.js';
 import { fieldErrors } from '../validation.js';
 import {
   findExpenseById,
@@ -20,6 +24,7 @@ import {
   toExpense,
   updateExpense,
   type ExpenseCursor,
+  type ExpenseFilters,
   type ExpenseInput,
   type ExpensePageRow,
 } from '../expenses/expenses.js';
@@ -302,6 +307,23 @@ function exportCells(row: ExpensePageRow): string[] {
 const EXPORT_BATCH_SIZE = 500;
 
 /**
+ * EXP-21 AC-4. The ZIP's nineteenth column, appended to EXP-20's eighteen.
+ *
+ * It names a path inside an archive, which is why `GET /expenses/export.csv`
+ * does not carry it (NG-1): in a standalone download it would refer to nothing.
+ */
+const RECEIPT_FILE_COLUMN = 'Receipt File';
+
+/**
+ * AC-10. The expense has a receipt and its bytes could not be found. Distinct
+ * from an empty cell, which means the expense never had one.
+ */
+const MISSING_RECEIPT = 'MISSING';
+
+/** AC-3. The ledger sits at the archive root; images live under `receipts/`. */
+const CSV_ENTRY_NAME = 'expenses.csv';
+
+/**
  * EXP-11. Documentation only — no `body`, `querystring`, or `params` schema, for
  * the reasons recorded in `categories.ts`.
  *
@@ -354,12 +376,14 @@ const expenseValidationError = {
 } as const;
 
 export type ExpenseRouteOptions = {
+  /** EXP-21 needs `RECEIPTS_PATH` to read the images into the archive. */
+  config: Config;
   database: Database;
 };
 
 export function registerExpenseRoutes(
   app: FastifyInstance,
-  { database }: ExpenseRouteOptions,
+  { config, database }: ExpenseRouteOptions,
 ): void {
   // AC-20: the same guard the category and receipt routes use, unchanged.
   app.addHook('preHandler', requireAuth);
@@ -417,6 +441,85 @@ export function registerExpenseRoutes(
     const live = await findLiveCategoryIds(database.pool, userId, categoryIds);
 
     return categoryIds.some((id) => !live.has(id));
+  }
+
+  /**
+   * EXP-20 AC-13. Every matching expense, oldest first, one keyset batch at a
+   * time.
+   *
+   * Both exports walk the archive through this, so they can never disagree about
+   * which rows a filter selects or what order they arrive in — the ZIP's CSV and
+   * its images are generated from two separate passes over it (EXP-21), and a
+   * difference between them would put an image in the archive that no row names.
+   */
+  async function* expensePages(
+    userId: string,
+    filters: ExpenseFilters,
+  ): AsyncGenerator<ExpensePageRow[]> {
+    let cursor: ExpenseCursor | undefined;
+
+    for (;;) {
+      const batch = await listExpensePage(
+        database.pool,
+        userId,
+        filters,
+        cursor,
+        EXPORT_BATCH_SIZE,
+      );
+
+      if (batch.length === 0) {
+        return;
+      }
+
+      yield batch;
+
+      // A short batch means the last page; one more query would only prove it.
+      if (batch.length < EXPORT_BATCH_SIZE) {
+        return;
+      }
+
+      const last = batch[batch.length - 1] as ExpensePageRow;
+
+      cursor = {
+        purchasedOn: last.purchased_on,
+        createdAt: last.created_at_text,
+        id: last.id,
+      };
+    }
+  }
+
+  /**
+   * EXP-20 AC-13, extended by EXP-21 AC-4.
+   *
+   * `receiptCell` is what makes the same generator serve both exports: absent,
+   * the rows are EXP-20's 18 columns exactly (NG-1); supplied, each row gains
+   * the ZIP's `Receipt File` as a 19th. Yielding a whole batch as one string
+   * keeps the write count down without holding the export in memory.
+   */
+  function csvRecords(
+    userId: string,
+    filters: ExpenseFilters,
+    receiptCell?: (row: ExpensePageRow) => string,
+  ): AsyncGenerator<string> {
+    const header = receiptCell
+      ? [...EXPORT_HEADER, RECEIPT_FILE_COLUMN]
+      : EXPORT_HEADER;
+
+    async function* records(): AsyncGenerator<string> {
+      yield BOM + csvRow(header);
+
+      for await (const batch of expensePages(userId, filters)) {
+        yield batch
+          .map((row) =>
+            csvRow(
+              receiptCell ? [...exportCells(row), receiptCell(row)] : exportCells(row),
+            ),
+          )
+          .join('');
+      }
+    }
+
+    return records();
   }
 
   app.get('/expenses', {
@@ -542,46 +645,7 @@ export function registerExpenseRoutes(
     }
 
     const filters = { from, to, categoryIds, hasReceipt };
-
-    /**
-     * AC-13. One batch in memory at a time, resumed by keyset rather than
-     * OFFSET. Yielding a whole batch as one string keeps the write count down
-     * without holding the export.
-     */
-    async function* records(): AsyncGenerator<string> {
-      yield BOM + csvRow(EXPORT_HEADER);
-
-      let cursor: ExpenseCursor | undefined;
-
-      for (;;) {
-        const batch = await listExpensePage(
-          database.pool,
-          userId,
-          filters,
-          cursor,
-          EXPORT_BATCH_SIZE,
-        );
-
-        if (batch.length === 0) {
-          return;
-        }
-
-        yield batch.map((row) => csvRow(exportCells(row))).join('');
-
-        // A short batch means the last page; one more query would only prove it.
-        if (batch.length < EXPORT_BATCH_SIZE) {
-          return;
-        }
-
-        const last = batch[batch.length - 1] as ExpensePageRow;
-
-        cursor = {
-          purchasedOn: last.purchased_on,
-          createdAt: last.created_at_text,
-          id: last.id,
-        };
-      }
-    }
+    const records = csvRecords(userId, filters);
 
     // AC-11. Named from the range actually covered, so two exports do not
     // collide in a downloads folder and each file says what is in it.
@@ -600,7 +664,7 @@ export function registerExpenseRoutes(
     try {
       // `pipeline` applies backpressure, so a slow client throttles the queries
       // rather than filling memory with batches it has not read.
-      await pipeline(Readable.from(records(), { objectMode: false }), reply.raw);
+      await pipeline(Readable.from(records, { objectMode: false }), reply.raw);
     } catch (error) {
       // AC-14. The status line said 200 several batches ago, so there is no way
       // left to report this in-band. Destroying the socket gives the client a
@@ -658,6 +722,233 @@ export function registerExpenseRoutes(
     }
 
     return reply.code(201).send(toExpense(outcome.expense));
+  });
+
+  /**
+   * EXP-21. The ZIP export: the same filtered expenses as a CSV, plus the
+   * receipt images backing them.
+   */
+  app.get('/expenses/export.zip', {
+    schema: {
+      tags: ['Expenses'],
+      summary: 'Export the filtered expenses and their receipt images as a ZIP',
+      // AC-18. Prose rather than a `querystring` schema, banned repo-wide.
+      description:
+        'Streams `application/zip` as an attachment. Not JSON, and with no '
+        + 'response schema — a Fastify response schema is an allowlist and would '
+        + 'strip a streamed body.\n\n'
+        + 'Takes the same four optional filters as `GET /expenses`, with identical '
+        + 'semantics: `from`, `to` (both inclusive), repeatable `categoryId`, and '
+        + '`hasReceipt`. A malformed or unrecognised parameter answers 400 naming '
+        + 'it; an unknown, soft-deleted, or other account\'s `categoryId` answers '
+        + '422. Both are settled before any byte is written.\n\n'
+        + 'Layout:\n\n'
+        + '- `expenses.csv` at the root — every matching expense, oldest purchase '
+        + 'first, identical to `GET /expenses/export.csv` except for one extra '
+        + 'trailing column, `Receipt File`.\n'
+        + '- `receipts/<purchase date>_<merchant>_<short receipt id>.<ext>` — one '
+        + 'entry per matching expense whose receipt image is present on disk.\n\n'
+        + '`Receipt File` names the entry when the image is in the archive, reads '
+        + '`MISSING` when the expense has a receipt whose file is absent from '
+        + 'disk, and is empty when the expense has no receipt at all. A missing '
+        + 'file is skipped rather than fatal, so one lost image never costs the '
+        + 'whole export — unlike `GET /receipts/{id}/file`, which answers 503.\n\n'
+        + 'Entries are stored uncompressed, because JPEG, PNG, WebP and HEIC do '
+        + 'not compress meaningfully. The archive is always ZIP64, so a multi-GB '
+        + 'export uses the same code path as a small one. The download is named '
+        + 'from the range covered, like the CSV.',
+      security: [{ bearerAuth: [] }],
+      response: {
+        // AC-18. Deliberately no 200: this route streams an archive.
+        400: expenseValidationError,
+        401: expenseError,
+        422: expenseError,
+      },
+    },
+  }, async (request, reply) => {
+    const parsed = querySchema.safeParse(request.query);
+
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: 'Validation failed', fields: fieldErrors(parsed.error) });
+    }
+
+    const userId = authenticatedUserId(request);
+    const { from, to, categoryId: categoryIds, hasReceipt } = parsed.data;
+
+    // AC-2. Settled before a single byte is written — once the archive starts
+    // there is no status code left to change.
+    if (await unknownCategoryFilter(userId, categoryIds)) {
+      return reply.code(422).send(CATEGORY_NOT_FOUND);
+    }
+
+    const filters = { from, to, categoryIds, hasReceipt };
+
+    /**
+     * AC-10 and AC-14. The presence pass.
+     *
+     * `Receipt File` cannot be written until each image's presence is known, and
+     * the CSV is the first entry in the archive — so presence is resolved up
+     * front, in the same order the CSV will use, and the answer is carried as
+     * one short string per expense. Only metadata is held: no image byte is read
+     * here, and no file is opened.
+     *
+     * The alternative — buffering the whole CSV so it could be written last —
+     * would hold every rendered row in memory instead, which is strictly more
+     * for the exports where it matters.
+     */
+    const cellFor = new Map<string, string>();
+    const images: { name: string; sha256: string; mtime: Date }[] = [];
+    const usedNames = new Set<string>();
+
+    // Anything thrown here happens before the response has started, so the
+    // global handler still turns it into a proper 500 rather than a truncated
+    // archive.
+    {
+      for await (const batch of expensePages(userId, filters)) {
+        const receiptIds = batch
+          .map((row) => row.receipt_id)
+          .filter((id): id is string => id !== null);
+
+        const files = await findReceiptFilesByIds(database.pool, userId, receiptIds);
+
+        for (const row of batch) {
+          // AC-10, third case: no receipt at all is an empty cell, which must
+          // stay distinguishable from MISSING.
+          if (row.receipt_id === null) {
+            continue;
+          }
+
+          const file = files.get(row.receipt_id);
+
+          // AC-10 and AC-11. A row with no file, or whose bytes are gone, is
+          // recorded rather than fatal. EXP-14 made the same condition a 503 on
+          // the file route; here the export must still complete, because a
+          // partial archive that says which images are absent beats no archive.
+          if (!file || !(await fileIsPresent(config.RECEIPTS_PATH, userId, file.sha256))) {
+            cellFor.set(row.id, MISSING_RECEIPT);
+            continue;
+          }
+
+          const name = uniqueEntryName(
+            entryName({
+              purchasedOn: row.purchased_on,
+              merchantName: row.merchant_name,
+              receiptId: file.id,
+              contentType: file.contentType,
+            }),
+            usedNames,
+          );
+
+          cellFor.set(row.id, name);
+          images.push({ name, sha256: file.sha256, mtime: file.createdAt });
+        }
+      }
+    }
+
+    // AC-15. The same rule as the CSV, so a pair of exports for one period sit
+    // next to each other in a downloads folder.
+    const filename = `expenses-${from ?? 'start'}-to-${to ?? todayInMalaysia()}.zip`;
+
+    const archive = new ZipFile();
+
+    // AC-3 and AC-4. The ledger first, as a stream: the CSV is regenerated from
+    // a second pass rather than buffered, and `cellFor` supplies the 19th column
+    // that the pass above resolved.
+    const ledger = Readable.from(
+      csvRecords(userId, filters, (row) => cellFor.get(row.id) ?? ''),
+      { objectMode: false },
+    );
+
+    /**
+     * AC-17. **Both** of these are required, and neither is redundant.
+     *
+     * `pipeline` below instruments only `archive.outputStream`, and yazl reports
+     * failures in two other places — so without these listeners an
+     * `ERR_UNHANDLED_ERROR` reaches the top level and **kills the process**,
+     * taking out every other request rather than truncating this one download.
+     * Both paths were reproduced.
+     *
+     * - `archive` — yazl emits on the ZipFile itself when `addFile` cannot stat
+     *   or read a path. Reached whenever a receipt file disappears between the
+     *   presence pass above and the pump below, which is exactly the restored-
+     *   without-its-volume case this feature is built around.
+     * - `ledger` — yazl attaches no error listener to a stream handed to
+     *   `addReadStream`, so a database failure part-way through the CSV lands
+     *   unhandled on the Readable. The `archive` listener does **not** cover
+     *   this one.
+     *
+     * Destroying `outputStream` is what converts either into a `pipeline`
+     * rejection, so the single catch below stays the one place that logs and
+     * destroys the socket.
+     *
+     * `GET /expenses/export.csv` needs none of this: there the generator is
+     * handed straight to `pipeline`, which instruments its own source. The
+     * difference is that here the stream goes to yazl instead.
+     */
+    // yazl types `outputStream` as the minimal `NodeJS.ReadableStream`, which
+    // has no `destroy`. It is a real `Readable` at run time — that is what
+    // `pipeline` consumes below.
+    const output = archive.outputStream as Readable;
+
+    const abort = (error: Error): void => {
+      output.destroy(error);
+    };
+
+    archive.on('error', abort);
+    ledger.on('error', abort);
+
+    archive.addReadStream(ledger, CSV_ENTRY_NAME, {
+      compress: false,
+      mtime: new Date(),
+    });
+
+    // AC-5, AC-12, AC-14. `addFile` opens each path only when its turn comes, so
+    // twenty thousand entries are twenty thousand sequential opens rather than
+    // twenty thousand concurrent file descriptors.
+    for (const image of images) {
+      archive.addFile(filePath(config.RECEIPTS_PATH, userId, image.sha256), image.name, {
+        compress: false,
+        mtime: image.mtime,
+      });
+    }
+
+    /**
+     * AC-13. ZIP64 at the **archive** level, always — the end-of-central-
+     * directory record and its locator are written whatever the size, so the
+     * >4 GB total and the >65,535 entry cases use the same code path as a
+     * four-receipt export rather than a branch that first runs at year seven.
+     *
+     * Per-*entry* ZIP64 is deliberately NOT forced, and that is a compatibility
+     * fix rather than an oversight. Forcing it made macOS Archive Utility —
+     * `ditto`, which is what double-clicking a ZIP in Finder uses — extract the
+     * first entry, lose sync on the next local header, and abandon the rest:
+     * measured, four entries in and one recovered. Python, `unzip` and yauzl all
+     * read the same archive perfectly, so it presents as a valid file that the
+     * owner's own machine silently truncates, which is the worst failure shape
+     * available. An entry-level ZIP64 header only matters for a single file over
+     * 4 GB, and `MAX_UPLOAD_BYTES` caps one receipt at 10 MB, so that branch is
+     * unreachable by construction.
+     */
+    archive.end({ forceZip64Format: true, comment: '' });
+
+    reply.hijack();
+    reply.raw.writeHead(200, {
+      'content-type': 'application/zip',
+      'content-disposition': `attachment; filename="${filename}"`,
+    });
+
+    try {
+      await pipeline(output, reply.raw);
+    } catch (error) {
+      // AC-17. The central directory is written last, so a destroyed connection
+      // leaves an archive that fails to open — which is the honest outcome. An
+      // archive finalised around whatever succeeded would open cleanly while
+      // being silently short.
+      request.log.error({ err: error }, 'expense ZIP export failed mid-stream');
+      reply.raw.destroy();
+    }
   });
 
   app.get('/expenses/:id', {

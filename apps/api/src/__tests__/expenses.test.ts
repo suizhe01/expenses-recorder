@@ -1,9 +1,10 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
-import { randomBytes } from 'node:crypto';
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { createHash, randomBytes } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
+import { fromBuffer } from 'yauzl';
 import { buildApp } from '../app.js';
 import { parseConfig, type Config } from '../config.js';
 import { createDatabase, type Database } from '../db.js';
@@ -1701,6 +1702,622 @@ describe('EXP-20: GET /expenses/export.csv', () => {
     // A filter dropped on the second batch would return 1,200.
     expect(rows.length).toBe(600);
     expect(rows.every((row) => row.includes(food))).toBe(true);
+  });
+});
+
+/**
+ * EXP-21 — the ZIP export.
+ *
+ * Every archive here is read back with **yauzl**, a different library from the
+ * yazl that wrote it. A ZIP that only its own writer can read is not a ZIP, and
+ * asserting on the byte stream would prove nothing about whether Excel, Finder
+ * or `unzip` can open it.
+ */
+describe('EXP-21: GET /expenses/export.zip', () => {
+  type Entry = {
+    buffer: Buffer;
+    compressionMethod: number;
+    utf8: boolean;
+  };
+
+  function exportZip(token: string, query = '') {
+    return app.inject({
+      method: 'GET',
+      url: `/expenses/export.zip${query === '' ? '' : `?${query}`}`,
+      headers: auth(token),
+    });
+  }
+
+  function readZip(data: Buffer): Promise<Map<string, Entry>> {
+    return new Promise((resolve, reject) => {
+      fromBuffer(data, { lazyEntries: true }, (error, zip) => {
+        if (error || !zip) {
+          reject(error ?? new Error('not a zip'));
+          return;
+        }
+
+        const entries = new Map<string, Entry>();
+
+        zip.on('entry', (entry) => {
+          zip.openReadStream(entry, (streamError, stream) => {
+            if (streamError || !stream) {
+              reject(streamError ?? new Error('no stream'));
+              return;
+            }
+
+            const chunks: Buffer[] = [];
+            stream.on('data', (chunk: Buffer) => chunks.push(chunk));
+            stream.on('error', reject);
+            stream.on('end', () => {
+              entries.set(entry.fileName, {
+                buffer: Buffer.concat(chunks),
+                compressionMethod: entry.compressionMethod,
+                // Bit 11 is the UTF-8 filename flag.
+                utf8: (entry.generalPurposeBitFlag & 0x800) !== 0,
+              });
+              zip.readEntry();
+            });
+          });
+        });
+        zip.on('error', reject);
+        zip.on('end', () => resolve(entries));
+        zip.readEntry();
+      });
+    });
+  }
+
+  async function archiveOf(token: string, query = ''): Promise<Map<string, Entry>> {
+    const response = await exportZip(token, query);
+
+    expect(response.statusCode).toBe(200);
+
+    return readZip(response.rawPayload);
+  }
+
+  function csvOf(entries: Map<string, Entry>): string[] {
+    const csv = entries.get('expenses.csv');
+
+    if (!csv) {
+      throw new Error('archive has no expenses.csv');
+    }
+
+    return csv.buffer.toString('utf8').replace(/^\uFEFF/, '').split('\r\n').slice(0, -1);
+  }
+
+  function imageNames(entries: Map<string, Entry>): string[] {
+    return [...entries.keys()].filter((name) => name !== 'expenses.csv').sort();
+  }
+
+  /** The `Receipt File` cell of every data row, in order. */
+  function receiptCells(entries: Map<string, Entry>): string[] {
+    return csvOf(entries)
+      .slice(1)
+      .map((row) => row.split(',').pop() as string);
+  }
+
+  /**
+   * Writes bytes to the store and inserts a receipt row with a chosen id, so a
+   * test can control the id — needed to force the AC-9 collision, which cannot
+   * be provoked through the upload route.
+   */
+  async function seedReceipt(
+    userId: string,
+    id: string,
+    content: Buffer,
+    contentType = 'image/jpeg',
+  ): Promise<string> {
+    const sha256 = createHash('sha256').update(content).digest('hex');
+    const directory = join(root, userId);
+
+    await mkdir(directory, { recursive: true });
+    await writeFile(join(directory, sha256), content);
+    await database.pool.query(
+      `INSERT INTO receipts (id, user_id, sha256, byte_size, content_type)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [id, userId, sha256, content.length, contentType],
+    );
+
+    return sha256;
+  }
+
+  it('AC-1: answers 200 as an application/zip attachment', async () => {
+    const { token } = await account('zip-basic@example.com');
+    await anExpense(token);
+
+    const response = await exportZip(token);
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['content-type']).toBe('application/zip');
+    expect(response.headers['content-disposition']).toContain('attachment');
+  });
+
+  it('AC-1: refuses a missing or invalid token', async () => {
+    const anonymous = await app.inject({ method: 'GET', url: '/expenses/export.zip' });
+    const garbage = await app.inject({
+      method: 'GET',
+      url: '/expenses/export.zip',
+      headers: { authorization: 'Bearer not.a.token' },
+    });
+
+    expect(anonymous.statusCode).toBe(401);
+    expect(garbage.statusCode).toBe(401);
+  });
+
+  it('AC-3, AC-4, NG-1: the in-ZIP CSV has 19 columns and export.csv still has 18', async () => {
+    const { token } = await account('zip-columns@example.com');
+    await anExpense(token);
+
+    const zipHeader = (csvOf(await archiveOf(token))[0] as string).split(',');
+    const standalone = await app.inject({
+      method: 'GET',
+      url: '/expenses/export.csv',
+      headers: auth(token),
+    });
+    const csvHeader = standalone.body
+      .replace(/^\uFEFF/, '')
+      .split('\r\n')[0]
+      ?.split(',') as string[];
+
+    expect(csvHeader).toHaveLength(18);
+    expect(zipHeader).toHaveLength(19);
+    // The first 18 are identical and in the same order; only the 19th is new.
+    expect(zipHeader.slice(0, 18)).toEqual(csvHeader);
+    expect(zipHeader[18]).toBe('Receipt File');
+  });
+
+  it('AC-3: keeps the CSV rules — BOM, CRLF, oldest first', async () => {
+    const { token } = await account('zip-csv-rules@example.com');
+    const food = await categoryNamed(token, 'Food');
+
+    for (const purchasedOn of ['2026-07-31', '2026-06-15', '2026-08-08']) {
+      await anExpense(token, { purchasedOn, categoryId: food });
+    }
+
+    const csv = (await archiveOf(token)).get('expenses.csv') as Entry;
+    const text = csv.buffer.toString('utf8');
+
+    expect(csv.buffer.subarray(0, 3)).toEqual(Buffer.from([0xef, 0xbb, 0xbf]));
+    expect(text).toContain('\r\n');
+    expect(
+      csvOf(await archiveOf(token))
+        .slice(1)
+        .map((row) => row.split(',')[1]),
+    ).toEqual(['2026-06-15', '2026-07-31', '2026-08-08']);
+  });
+
+  it('AC-5, AC-6, AC-7, AC-8: names entries by date, merchant and short id', async () => {
+    const { token } = await account('zip-names@example.com');
+    const receipts = [
+      await upload(token, 'latin'),
+      await upload(token, 'chinese'),
+      await upload(token, 'nameless'),
+    ];
+
+    await anExpense(token, {
+      purchasedOn: '2025-01-20',
+      merchantName: 'Master Prawn Mee',
+      receiptId: receipts[0],
+    });
+    await anExpense(token, {
+      purchasedOn: '2026-08-08',
+      merchantName: '皇帝虾面',
+      receiptId: receipts[1],
+    });
+    await anExpense(token, { purchasedOn: '2026-06-15', receiptId: receipts[2] });
+
+    const entries = await archiveOf(token);
+
+    expect(imageNames(entries)).toEqual([
+      `receipts/2025-01-20_Master-Prawn-Mee_${receipts[0]?.slice(0, 8)}.jpg`,
+      `receipts/2026-06-15_unknown_${receipts[2]?.slice(0, 8)}.jpg`,
+      `receipts/2026-08-08_皇帝虾面_${receipts[1]?.slice(0, 8)}.jpg`,
+    ]);
+
+    // AC-8: without the UTF-8 flag the Chinese name extracts as mojibake.
+    for (const entry of entries.values()) {
+      expect(entry.utf8).toBe(true);
+    }
+  });
+
+  it('NG-6: stores the image bytes verbatim', async () => {
+    const { token } = await account('zip-bytes@example.com');
+    const receiptId = await upload(token, 'verbatim');
+    await anExpense(token, { receiptId });
+
+    const entries = await archiveOf(token);
+    const image = entries.get(imageNames(entries)[0] as string) as Entry;
+
+    // Byte-for-byte what was uploaded: no re-encoding, no EXIF stripping.
+    expect(image.buffer).toEqual(jpeg('verbatim'));
+  });
+
+  it('AC-12: stores entries uncompressed', async () => {
+    const { token } = await account('zip-stored@example.com');
+    const receiptId = await upload(token, 'stored');
+    await anExpense(token, { receiptId });
+
+    for (const entry of (await archiveOf(token)).values()) {
+      // 0 is stored, 8 is deflate.
+      expect(entry.compressionMethod).toBe(0);
+    }
+  });
+
+  it('AC-13: writes archive-level ZIP64 even for a tiny archive', async () => {
+    const { token } = await account('zip64@example.com');
+    await anExpense(token);
+
+    const response = await exportZip(token);
+
+    // The Zip64 end-of-central-directory record and its locator. Absent from a
+    // plain ZIP, so this fails the moment the format becomes size-dependent.
+    expect(response.rawPayload.includes(Buffer.from('PK\x06\x06', 'latin1'))).toBe(true);
+    expect(response.rawPayload.includes(Buffer.from('PK\x06\x07', 'latin1'))).toBe(true);
+  });
+
+  /**
+   * AC-13, the other half — and a compatibility regression guard.
+   *
+   * Forcing ZIP64 on individual entries made macOS Archive Utility (`ditto`,
+   * which Finder uses) extract the first entry, lose sync on the next local
+   * header and silently abandon the rest — while Python, `unzip` and yauzl all
+   * read the very same archive perfectly. A file that only the owner's own
+   * machine mangles is the worst possible failure, so per-entry ZIP64 stays off.
+   *
+   * Extra field id 0x0001 is the ZIP64 extended-information header. It has no
+   * business appearing on a 68-byte receipt.
+   */
+  it('AC-13: does not force ZIP64 onto individual entries', async () => {
+    const { token } = await account('zip64-entries@example.com');
+    const receiptId = await upload(token, 'zip64-entry');
+    await anExpense(token, { receiptId });
+
+    const payload = (await exportZip(token)).rawPayload;
+
+    // Walk the central directory headers and read each entry's extra field.
+    let offset = payload.indexOf(Buffer.from('PK\x01\x02', 'latin1'));
+    let checked = 0;
+
+    while (offset !== -1) {
+      const nameLength = payload.readUInt16LE(offset + 28);
+      const extraLength = payload.readUInt16LE(offset + 30);
+      const extra = payload.subarray(
+        offset + 46 + nameLength,
+        offset + 46 + nameLength + extraLength,
+      );
+
+      for (let cursor = 0; cursor + 4 <= extra.length; ) {
+        const headerId = extra.readUInt16LE(cursor);
+
+        expect(headerId, 'entry carries a ZIP64 extended-information field').not.toBe(
+          0x0001,
+        );
+        cursor += 4 + extra.readUInt16LE(cursor + 2);
+      }
+
+      checked += 1;
+      offset = payload.indexOf(Buffer.from('PK\x01\x02', 'latin1'), offset + 1);
+    }
+
+    // The CSV and the image, so the walk above actually inspected something.
+    expect(checked).toBe(2);
+  });
+
+  it('AC-9: suffixes an entry whose name would collide', async () => {
+    const { token, userId } = await account('zip-collision@example.com');
+    const food = await categoryNamed(token, 'Food');
+
+    // Two receipt ids sharing their first eight characters, on the same date
+    // with the same merchant — the only way the name can actually repeat.
+    const first = 'aaaaaaaa-0000-4000-8000-000000000001';
+    const second = 'aaaaaaaa-0000-4000-8000-000000000002';
+
+    await seedReceipt(userId, first, jpeg('collide-one'));
+    await seedReceipt(userId, second, jpeg('collide-two'));
+
+    for (const receiptId of [first, second]) {
+      await anExpense(token, {
+        categoryId: food,
+        purchasedOn: '2026-08-08',
+        merchantName: 'Same Shop',
+        receiptId,
+      });
+    }
+
+    expect(imageNames(await archiveOf(token))).toEqual([
+      'receipts/2026-08-08_Same-Shop_aaaaaaaa-2.jpg',
+      'receipts/2026-08-08_Same-Shop_aaaaaaaa.jpg',
+    ]);
+  });
+
+  it('AC-10, AC-11, NG-2: distinguishes present, MISSING and no receipt', async () => {
+    const { token, userId } = await account('zip-missing@example.com');
+    const food = await categoryNamed(token, 'Food');
+
+    const presentId = await upload(token, 'present');
+    const goneId = 'bbbbbbbb-0000-4000-8000-000000000001';
+    const goneSha = await seedReceipt(userId, goneId, jpeg('gone'));
+
+    await anExpense(token, {
+      categoryId: food,
+      purchasedOn: '2026-06-01',
+      receiptId: presentId,
+    });
+    await anExpense(token, {
+      categoryId: food,
+      purchasedOn: '2026-06-02',
+      receiptId: goneId,
+    });
+    await anExpense(token, { categoryId: food, purchasedOn: '2026-06-03' });
+
+    // The row survives; only the bytes are gone — a volume restored without its
+    // files, which is exactly what EXP-14 was written for.
+    await rm(join(root, userId, goneSha));
+
+    const entries = await archiveOf(token);
+    const cells = receiptCells(entries);
+
+    expect(cells[0]).toMatch(/^receipts\/2026-06-01_/);
+    expect(cells[1]).toBe('MISSING');
+    expect(cells[2]).toBe('');
+    // All three are distinguishable, and only the present one is in the archive.
+    expect(new Set(cells).size).toBe(3);
+    expect(imageNames(entries)).toHaveLength(1);
+
+    // NG-2: the file route still answers 503 for the same condition.
+    const file = await app.inject({
+      method: 'GET',
+      url: `/receipts/${goneId}/file`,
+      headers: auth(token),
+    });
+    expect(file.statusCode).toBe(503);
+  });
+
+  /**
+   * AC-17, and the reason this pair exists.
+   *
+   * yazl reports failures in two places that `pipeline(outputStream, …)` does
+   * not observe, and an unhandled `error` event **terminates the Node process**
+   * rather than the download. Both were reproduced before the listeners were
+   * added, and both tests below take the whole vitest worker down without them
+   * — a crashed worker is the failure signal, which is exactly the severity
+   * being guarded against.
+   */
+  it('AC-17: survives a file that cannot be read once the archive is pumping', async () => {
+    const { token, userId } = await account('zip-unreadable@example.com');
+    const receiptId = 'dddddddd-0000-4000-8000-000000000001';
+    const sha256 = createHash('sha256').update(jpeg('unreadable')).digest('hex');
+
+    // A DIRECTORY where the bytes should be. `fileIsPresent` uses access(R_OK),
+    // which succeeds for a directory, so the presence pass calls it present and
+    // yazl then fails with "not a file" while pumping — the same code path a
+    // file vanishing mid-export takes, but deterministic rather than a race.
+    await mkdir(join(root, userId, sha256), { recursive: true });
+    await database.pool.query(
+      `INSERT INTO receipts (id, user_id, sha256, byte_size, content_type)
+       VALUES ($1, $2, $3, $4, 'image/jpeg')`,
+      [receiptId, userId, sha256, 68],
+    );
+    await anExpense(token, { purchasedOn: '2026-06-01', receiptId });
+
+    // The transfer fails rather than completing. Under `inject` that surfaces
+    // as a rejection, because destroying light-my-request's mock response
+    // propagates the error into its promise; over a real socket the client
+    // simply gets a truncated download, which is AC-17's intent either way.
+    await expect(exportZip(token)).rejects.toThrow(/not a file/);
+
+    // The point of the test: the process is still here to answer. Without the
+    // error listeners this line is never reached, because the unhandled event
+    // takes the worker down with it.
+    const health = await app.inject({ method: 'GET', url: '/health' });
+    expect(health.statusCode).toBe(200);
+  });
+
+  it('AC-17: survives the database failing part-way through the CSV', async () => {
+    const { token } = await account('zip-db-fails@example.com');
+    await anExpense(token, { purchasedOn: '2026-06-01' });
+
+    // The presence pass and the CSV pass each run one page query. Failing the
+    // second reproduces a database hiccup after the 200 has been sent, which is
+    // the exact scenario AC-17 describes — and it lands on the stream handed to
+    // yazl, which the `archive` listener alone does not cover.
+    let pageQueries = 0;
+    const flaky = {
+      ...database,
+      pool: {
+        ...database.pool,
+        query: ((text: string, values: unknown[]) => {
+          if (typeof text === 'string' && text.includes('created_at_text')) {
+            pageQueries += 1;
+
+            if (pageQueries > 1) {
+              return Promise.reject(new Error('pg: connection terminated'));
+            }
+          }
+
+          return database.pool.query(text, values as never);
+        }) as typeof database.pool.query,
+      },
+    } as Database;
+
+    const failing = buildApp({
+      config,
+      database: flaky,
+      emailTransport: silentTransport,
+      extractor: skippingExtractor,
+    });
+    await failing.ready();
+
+    try {
+      // Truncated rather than a well-formed archive that is silently short.
+      await expect(
+        failing.inject({
+          method: 'GET',
+          url: '/expenses/export.zip',
+          headers: auth(token),
+        }),
+      ).rejects.toThrow(/connection terminated/);
+
+      // The failure really did land on the second pass, after the 200.
+      expect(pageQueries).toBeGreaterThan(1);
+
+      // Still alive — this is the assertion the missing listener defeats.
+      const health = await failing.inject({ method: 'GET', url: '/health' });
+      expect(health.statusCode).toBe(200);
+    } finally {
+      await failing.close();
+    }
+  });
+
+  it('AC-16: an export matching nothing is a valid archive with the header alone', async () => {
+    const { token } = await account('zip-empty@example.com');
+
+    const entries = await archiveOf(token);
+
+    expect(imageNames(entries)).toEqual([]);
+    expect(csvOf(entries)).toHaveLength(1);
+    expect(csvOf(entries)[0]).toContain('Receipt File');
+  });
+
+  it('AC-2: applies the same filters as the CSV export', async () => {
+    const { token } = await account('zip-filters@example.com');
+    const food = await categoryNamed(token, 'Food');
+    const medical = await categoryNamed(token, 'Medical');
+    const receiptId = await upload(token, 'zip-filter');
+
+    await anExpense(token, { purchasedOn: '2026-06-15', categoryId: food });
+    await anExpense(token, { purchasedOn: '2026-07-01', categoryId: medical, receiptId });
+    await anExpense(token, { purchasedOn: '2026-08-08', categoryId: food });
+
+    for (const query of [
+      '',
+      'from=2026-07-01',
+      'from=2026-06-15&to=2026-07-01',
+      `categoryId=${food}`,
+      'hasReceipt=true',
+      'hasReceipt=false',
+    ]) {
+      const fromZip = csvOf(await archiveOf(token, query));
+      const fromCsv = (
+        await app.inject({
+          method: 'GET',
+          url: `/expenses/export.csv${query === '' ? '' : `?${query}`}`,
+          headers: auth(token),
+        })
+      ).body
+        .replace(/^\uFEFF/, '')
+        .split('\r\n')
+        .slice(0, -1);
+
+      // Same rows in the same order; the ZIP's copy carries one extra column.
+      expect(fromZip.length, query).toBe(fromCsv.length);
+      expect(
+        fromZip.slice(1).map((row) => row.split(',')[0]),
+        query,
+      ).toEqual(fromCsv.slice(1).map((row) => row.split(',')[0]));
+    }
+
+    // hasReceipt=false must yield rows but no images.
+    expect(imageNames(await archiveOf(token, 'hasReceipt=false'))).toEqual([]);
+    expect(imageNames(await archiveOf(token, 'hasReceipt=true'))).toHaveLength(1);
+  });
+
+  it('AC-2: answers 400 and 422 before writing anything', async () => {
+    const { token } = await account('zip-errors@example.com');
+    const food = await categoryNamed(token, 'Food');
+
+    for (const [query, field] of [
+      ['from=notadate', 'from'],
+      ['catgeoryId=x', 'catgeoryId'],
+      ['from=2026-06-01&to=2026-01-01', 'from'],
+    ] as const) {
+      const response = await exportZip(token, query);
+
+      expect(response.statusCode, query).toBe(400);
+      expect(response.headers['content-type'], query).toContain('application/json');
+      expect(fields(response)).toHaveProperty(field);
+    }
+
+    await app.inject({
+      method: 'DELETE',
+      url: `/categories/${food}`,
+      headers: auth(token),
+    });
+
+    const unprocessable = await exportZip(token, `categoryId=${food}`);
+    expect(unprocessable.statusCode).toBe(422);
+    expect(unprocessable.json()).toEqual({ error: 'Category not found' });
+  });
+
+  it('AC-15: names the download after the range it covers', async () => {
+    const { token } = await account('zip-filename@example.com');
+    const today = todayInMalaysia();
+
+    for (const [query, expected] of [
+      ['from=2026-01-01&to=2026-06-30', 'expenses-2026-01-01-to-2026-06-30.zip'],
+      ['from=2026-01-01', `expenses-2026-01-01-to-${today}.zip`],
+      ['to=2026-06-30', 'expenses-start-to-2026-06-30.zip'],
+      ['', `expenses-start-to-${today}.zip`],
+    ] as const) {
+      const response = await exportZip(token, query);
+
+      expect(response.headers['content-disposition'], query).toBe(
+        `attachment; filename="${expected}"`,
+      );
+    }
+  });
+
+  it('sees only the caller\'s own expenses and receipts', async () => {
+    const mine = await account('zip-mine@example.com');
+    const theirs = await account('zip-theirs@example.com');
+
+    const ours = await upload(mine.token, 'mine');
+    const foreign = await upload(theirs.token, 'theirs');
+    await anExpense(mine.token, { purchasedOn: '2026-06-15', receiptId: ours });
+    await anExpense(theirs.token, { purchasedOn: '2026-06-15', receiptId: foreign });
+
+    const names = imageNames(await archiveOf(mine.token));
+
+    expect(names).toHaveLength(1);
+    expect(names[0]).toContain(ours.slice(0, 8));
+    expect(names[0]).not.toContain(foreign.slice(0, 8));
+  });
+
+  /**
+   * AC-14. More than one keyset batch, every entry present exactly once.
+   *
+   * Seeded straight into the database and the store: 520 uploads through HTTP
+   * would dominate the suite's runtime and prove nothing extra about batching.
+   */
+  it('AC-14: crosses batch boundaries with every entry exactly once', async () => {
+    const { token, userId } = await account('zip-batches@example.com');
+    const food = await categoryNamed(token, 'Food');
+    const total = 520;
+
+    for (let index = 0; index < total; index += 1) {
+      const receiptId = `cccccccc-0000-4000-8000-${index.toString().padStart(12, '0')}`;
+
+      await seedReceipt(userId, receiptId, jpeg(`batch-${index}`));
+      await database.pool.query(
+        `INSERT INTO expenses (user_id, category_id, total_cents, purchased_on, receipt_id)
+         VALUES ($1, $2, $3, DATE '2020-01-01' + $4::int, $5)`,
+        [userId, food, 100 + index, index % 7, receiptId],
+      );
+    }
+
+    const entries = await archiveOf(token);
+    const names = imageNames(entries);
+
+    expect(names).toHaveLength(total);
+    expect(new Set(names).size).toBe(total);
+    expect(csvOf(entries)).toHaveLength(total + 1);
+
+    // Every row's cell names an entry that is actually in the archive — the
+    // CSV and the images come from two separate passes, so a drift between
+    // them would leave a row pointing at nothing.
+    const present = new Set(names);
+    for (const cell of receiptCells(entries)) {
+      expect(present.has(cell)).toBe(true);
+    }
   });
 });
 

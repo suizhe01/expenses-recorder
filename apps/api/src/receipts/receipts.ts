@@ -91,6 +91,62 @@ export async function findLiveById(
   return rows[0];
 }
 
+/** EXP-21. What the ZIP export needs to name an entry and find its bytes. */
+export type ReceiptFile = {
+  id: string;
+  sha256: string;
+  contentType: string;
+  createdAt: Date;
+};
+
+/**
+ * EXP-21 AC-5 and AC-6. The stored file behind each of the given receipt ids.
+ *
+ * Batched rather than queried per row, so a page of 500 expenses costs one
+ * round-trip instead of 500.
+ *
+ * **Deliberately not filtered on `deleted_at`.** These ids come from live
+ * expenses, and EXP-16's AC-18 answers 409 rather than let a receipt backing an
+ * expense be deleted — so a soft-deleted row reaching here means the known
+ * check-then-act race did, and the bytes are still on disk untouched. Excluding
+ * it would report the image as `MISSING` when it exists and the expense
+ * legitimately refers to it, which is the worse answer for an archive whose
+ * whole job is producing evidence.
+ */
+export async function findReceiptFilesByIds(
+  executor: Executor,
+  userId: string,
+  ids: string[],
+): Promise<Map<string, ReceiptFile>> {
+  if (ids.length === 0) {
+    return new Map();
+  }
+
+  const { rows } = await executor.query<{
+    id: string;
+    sha256: string;
+    content_type: string;
+    created_at: Date;
+  }>(
+    `SELECT id, sha256, content_type, created_at
+     FROM receipts
+     WHERE user_id = $1 AND id = ANY($2::uuid[])`,
+    [userId, ids],
+  );
+
+  return new Map(
+    rows.map((row) => [
+      row.id,
+      {
+        id: row.id,
+        sha256: row.sha256,
+        contentType: row.content_type,
+        createdAt: row.created_at,
+      },
+    ]),
+  );
+}
+
 export type InsertOutcome =
   | { status: 'created'; receipt: ReceiptRow }
   | { status: 'duplicate' };

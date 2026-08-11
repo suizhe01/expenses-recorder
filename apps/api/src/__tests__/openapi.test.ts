@@ -69,6 +69,7 @@ describe('the OpenAPI document', () => {
       '/expenses',
       '/expenses/{id}',
       '/expenses/export.csv',
+      '/expenses/export.zip',
     ]) {
       expect(paths).toContain(expected);
     }
@@ -89,8 +90,9 @@ describe('the OpenAPI document', () => {
       ['/expenses/{id}', 'get'],
       ['/expenses/{id}', 'patch'],
       ['/expenses/{id}', 'delete'],
-      // EXP-20 AC-17.
+      // EXP-20 AC-17 and EXP-21 AC-20.
       ['/expenses/export.csv', 'get'],
+      ['/expenses/export.zip', 'get'],
     ] as const) {
       expect(doc.paths[path]?.[method]?.tags, `${method} ${path}`).toContain('Expenses');
     }
@@ -103,18 +105,21 @@ describe('the OpenAPI document', () => {
    * JSON — which is why this asserts on the 200 specifically rather than on the
    * absence of `response` altogether.
    */
-  it('AC-15: the CSV export declares no 200 response schema', () => {
-    const doc = app.swagger() as unknown as {
-      paths: Record<string, Record<string, { responses?: Record<string, unknown> }>>;
-    };
-    const responses = doc.paths['/expenses/export.csv']?.get?.responses ?? {};
+  it.each(['/expenses/export.csv', '/expenses/export.zip'])(
+    'EXP-20 AC-15 and EXP-21 AC-18: %s declares no 200 response schema',
+    (path) => {
+      const doc = app.swagger() as unknown as {
+        paths: Record<string, Record<string, { responses?: Record<string, unknown> }>>;
+      };
+      const responses = doc.paths[path]?.get?.responses ?? {};
 
-    expect(Object.keys(responses)).not.toContain('200');
-    // The error shapes are still documented.
-    expect(Object.keys(responses)).toEqual(
-      expect.arrayContaining(['400', '401', '422']),
-    );
-  });
+      expect(Object.keys(responses)).not.toContain('200');
+      // The error shapes are still documented.
+      expect(Object.keys(responses)).toEqual(
+        expect.arrayContaining(['400', '401', '422']),
+      );
+    },
+  );
 
   it('AC-1: is a valid OpenAPI 3 document', () => {
     expect(document().openapi).toMatch(/^3\./);
