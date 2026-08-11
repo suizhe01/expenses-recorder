@@ -107,12 +107,20 @@ Then lock it down:
 chmod 600 .env
 ```
 
-> **`TRUST_PROXY=true` is only safe with the loopback binding.**
-> `docker-compose.prod.yml` publishes the API on `127.0.0.1:3000`, so the only
-> thing that can reach it is `tailscaled` on the same host. That is what makes
-> `X-Forwarded-For` trustworthy. If you ever change that port mapping to
-> `3000:3000`, the API becomes directly reachable and any caller can forge the
-> header to evade the auth rate limit — set `TRUST_PROXY=false` if you do.
+> **`TRUST_PROXY=true` trusts exactly one hop.** The API counts one proxy —
+> `tailscaled` on the same host — and takes the address that proxy appended,
+> ignoring anything the client put to the left of it. Trusting the header
+> outright would be worse than useless: a caller could forge a different value
+> per request and get a fresh rate-limit bucket every time, which removes the
+> brute-force limit on `/auth/login` entirely.
+>
+> **If you ever put another proxy in front** — nginx, Caddy, a second tunnel —
+> the count is wrong and the address is again attacker-controlled. That number
+> lives in `app.ts` next to `trustProxy`.
+>
+> The loopback binding matters for a different reason: it stops anyone reaching
+> the API directly and bypassing the tunnel. If you change the mapping to
+> `3000:3000`, set `TRUST_PROXY=false`.
 >
 > Left at `false` behind the Funnel, the opposite problem appears: every
 > request looks like it came from the proxy, so the 10-requests-a-minute auth
@@ -332,6 +340,19 @@ database, restore the pre-upgrade backup instead — that is what it is for.
   date range if an export truncates, and record the size at which it breaks.
 
   <!-- Measured limit: not yet established. Fill this in from a real export. -->
+
+- **Whether Funnel sends `X-Forwarded-For` at all is unverified.** `TRUST_PROXY`
+  assumes it does, and takes the address one hop in. If it turns out Funnel
+  does not set the header, `request.ip` falls back to the socket address —
+  every client shares one rate-limit bucket, silently. Check it on the first
+  deploy: hit the API from a phone and look at `remoteAddress` in the log.
+
+  ```bash
+  docker compose -f docker-compose.prod.yml logs api | grep remoteAddress | tail -1
+  ```
+
+  A real public address means the header arrived. `127.0.0.1` means it did not,
+  and the per-client limit is not working — record that here and open an issue.
 
 ---
 

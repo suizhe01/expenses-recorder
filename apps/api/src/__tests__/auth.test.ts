@@ -665,6 +665,36 @@ describe('TRUST_PROXY and rate-limit bucketing', () => {
   });
 
   /**
+   * The case the first three miss, and the one that caught a real defect.
+   *
+   * A single-entry `X-Forwarded-For` cannot tell `trustProxy: true` from
+   * `trustProxy: 1` — both report that one address, so every assertion above
+   * passes either way. A real proxy APPENDS: whatever the client sent arrives
+   * on the left, the address the proxy observed on the right. Only then do the
+   * two settings diverge, and only then does it show that `true` returns the
+   * forged half.
+   *
+   * Concretely: the attacker forges a different left-hand value each time
+   * while `tailscaled` appends the same true address. Under `true` that is a
+   * fresh bucket per request and the auth limit stops existing; under one
+   * counted hop the appended address wins and the limit holds.
+   */
+  it('bills a forged forwarded address to the hop the proxy appended', async () => {
+    const proxied = buildApp({ config: configWith('true'), database });
+    await proxied.ready();
+
+    try {
+      const statuses = await hammer(
+        proxied,
+        (i) => `198.51.100.${i}, 100.64.0.1`,
+      );
+      expect(statuses.at(-1)).toBe(429);
+    } finally {
+      await proxied.close();
+    }
+  });
+
+  /**
    * The direction that matters for security: with the flag off the header is
    * client-supplied noise. Were it honoured anyway, varying it would be all it
    * took to evade the limit entirely — so this asserts the limit still bites.

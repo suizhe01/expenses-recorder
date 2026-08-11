@@ -59,11 +59,23 @@ export function buildApp({
     // and the rate limiter below — which keys on it — would collapse into a
     // single global bucket: one noisy client would lock everyone out of login.
     //
-    // Trusting the header is only safe because the production compose file
-    // publishes the API on 127.0.0.1 (AC-3), so nothing but the proxy can
-    // reach it and no outside caller is in a position to forge one. Left off
-    // by default for exactly that reason — see the note in config.ts.
-    trustProxy: config.TRUST_PROXY,
+    // ONE HOP, never `true`. `trustProxy: true` means "trust every hop", and
+    // `proxy-addr` then returns the LEFTMOST X-Forwarded-For entry — which is
+    // whatever the client typed. Since @fastify/rate-limit keys on `req.ip`,
+    // that hands any caller an unlimited supply of fresh rate-limit buckets
+    // and removes the brute-force limit on /auth/login altogether. Measured:
+    //
+    //   x-forwarded-for: '9.9.9.9, 100.64.0.1', socket 127.0.0.1
+    //     trustProxy: true -> 9.9.9.9     (forged by the client)
+    //     trustProxy: 1    -> 100.64.0.1  (appended by the proxy)
+    //
+    // The loopback binding in the production compose file does not help here:
+    // it stops anyone reaching the API directly, but the header still arrives
+    // from the public internet through the tunnel. Counting hops is what makes
+    // the value trustworthy, so `1` must match the number of proxies actually
+    // in front of this process — exactly one, `tailscaled` on the same host.
+    // Adding another proxy means changing this number.
+    trustProxy: config.TRUST_PROXY ? 1 : false,
   });
 
   // EXP-14 AC-2 to AC-4. Set on the root instance, so every scope below
