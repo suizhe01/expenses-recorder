@@ -337,16 +337,46 @@ describe('EXP-22: documented requests', () => {
     expect(schema?.properties?.file?.format).toBe('binary');
   });
 
-  it('AC-6: every JSON body carries an example for Try-it-out to prefill', () => {
+  /**
+   * AC-6. Every documented body prefills Try-it-out, or is named here as unable
+   * to.
+   *
+   * The earlier version of this test skipped anything that was not JSON, which
+   * silently excused the only two bodies that failed the criterion. It now walks
+   * all twelve and carries exactly one exemption, asserted rather than assumed.
+   *
+   * Two prefill mechanisms, both confirmed in a browser: Swagger UI fills a JSON
+   * editor from the schema's **object-level** `example`, and fills a urlencoded
+   * form's individual inputs from each **property's** `example`.
+   */
+  const CANNOT_PREFILL = new Set(['post /receipts']);
+
+  it('AC-6: every documented body prefills Try-it-out, or is explicitly exempt', () => {
     for (const [method, path] of BODY_ROUTES) {
       const content = operation(path, method).requestBody?.content ?? {};
-      const json = content['application/json'];
+      const entry = Object.entries(content)[0];
 
-      if (!json) {
+      expect(entry, `${method.toUpperCase()} ${path} has no content`).toBeTruthy();
+
+      const [contentType, media] = entry as [string, { schema?: Record<string, unknown> }];
+      const schema = media.schema ?? {};
+      const label = `${method.toUpperCase()} ${path}`;
+
+      if (CANNOT_PREFILL.has(`${method} ${path}`)) {
+        // A file input takes a file, so no example string could appear in it.
+        // Asserting the content type keeps the exemption honest: it stops
+        // applying the moment this route stops being an upload.
+        expect(contentType, label).toBe('multipart/form-data');
         continue;
       }
 
-      expect(json.schema?.example, `${method.toUpperCase()} ${path}`).toBeTruthy();
+      const properties = (schema.properties ?? {}) as Record<string, object>;
+      const prefills =
+        'example' in schema ||
+        (Object.keys(properties).length > 0 &&
+          Object.values(properties).every((property) => 'example' in property));
+
+      expect(prefills, `${label} would open with an empty editor`).toBe(true);
     }
   });
 

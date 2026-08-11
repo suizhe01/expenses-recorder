@@ -213,9 +213,13 @@ export const REQUEST_SCHEMAS: Record<string, RequestEntry> = {
       type: 'object',
       required: ['token', 'password', 'confirmPassword'],
       properties: {
-        token: { type: 'string', description: 'From the emailed link.' },
-        password: { type: 'string', minLength: 12 },
-        confirmPassword: { type: 'string' },
+        token: {
+          type: 'string',
+          description: 'From the emailed link.',
+          example: 'paste-the-token-from-the-link',
+        },
+        password: { type: 'string', minLength: 12, example: 'correcthorsebattery' },
+        confirmPassword: { type: 'string', example: 'correcthorsebattery' },
       },
     },
   },
