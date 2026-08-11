@@ -60,6 +60,27 @@ const configSchema = z.object({
     .string()
     .email({ message: 'must be a valid email address' })
     .default('onboarding@resend.dev'),
+  // EXP-23 AC-4. Whether `X-Forwarded-For` may be believed. Off by default:
+  // an unproxied API that trusts the header lets any caller claim any address,
+  // which would let one client evade the auth rate limit by varying it.
+  //
+  // Deliberately NOT `z.coerce.boolean()`. That coerces by JavaScript
+  // truthiness, so the string "false" — the exact value an operator writes to
+  // turn this off — becomes `true`, silently trusting a spoofable header while
+  // the configuration says otherwise. The enum below rejects anything that is
+  // not "true" or "false" and names the variable when it does.
+  //
+  // Empty counts as absent, matching RESEND_API_KEY and GEMINI_API_KEY: docker
+  // compose expands an unset `${TRUST_PROXY:-}` to "", and failing on that
+  // would stop the API booting for anyone who has not set it.
+  TRUST_PROXY: z.preprocess(
+    (value) => (value === '' || value === undefined ? 'false' : value),
+    z
+      .enum(['true', 'false'], {
+        message: 'must be exactly "true" or "false"',
+      })
+      .transform((value) => value === 'true'),
+  ),
   // EXP-13 AC-14. Where receipt images are written. The default is relative to
   // the working directory so a bare `npm run dev` works with no setup; compose
   // overrides it with a named volume so the archive survives a rebuild.

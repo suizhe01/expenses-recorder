@@ -1,0 +1,64 @@
+# EXP-23 AC-1. Production image. The sibling `Dockerfile` is a development
+# image — it runs `tsx watch` over bind-mounted source with dev dependencies
+# installed — which is not something to expose to the internet.
+#
+# Built ON THE TARGET MACHINE (AC / NG-2): the deploy host is an Oracle Ampere
+# instance, so the image is arm64 there and amd64 in CI, from this one file.
+# No registry, no cross-building, nothing to authenticate.
+
+# ---------------------------------------------------------------------------
+# Stage 1 — build. Dev dependencies live here and go no further.
+# ---------------------------------------------------------------------------
+FROM node:22-alpine AS build
+
+WORKDIR /app
+
+COPY package.json package-lock.json* ./
+COPY apps/api/package.json ./apps/api/
+RUN npm ci
+
+COPY apps/api ./apps/api
+
+WORKDIR /app/apps/api
+RUN npm run build
+
+# ---------------------------------------------------------------------------
+# Stage 2 — runtime. Production dependencies and compiled output only.
+# ---------------------------------------------------------------------------
+FROM node:22-alpine AS runtime
+
+# Timezone data, so the TZ set in compose resolves to a real zone rather than
+# silently falling back to UTC. EXP-17 verified this matters.
+RUN apk add --no-cache tzdata
+
+ENV NODE_ENV=production
+
+WORKDIR /app
+
+COPY package.json package-lock.json* ./
+COPY apps/api/package.json ./apps/api/
+
+# AC-2. Production dependencies only: no tsx, no typescript, no vitest, no
+# eslint. `node-pg-migrate` is among them deliberately — the runbook migrates
+# with a one-off container from this same image (AC-8), which is only possible
+# because it is a runtime dependency rather than a dev one.
+RUN npm ci --omit=dev && npm cache clean --force
+
+COPY --from=build /app/apps/api/dist ./apps/api/dist
+
+# The migration CLI reads these at runtime; they are not part of the build.
+COPY apps/api/migrations ./apps/api/migrations
+
+# `app.ts` resolves ../package.json for the version reported by /health, which
+# from dist/app.js is apps/api/package.json — already copied above.
+
+WORKDIR /app/apps/api
+
+# Drop privileges. The node image ships an unprivileged `node` user; the
+# receipts volume is mounted at /data/receipts and must be writable by it.
+RUN mkdir -p /data/receipts && chown -R node:node /data/receipts /app
+USER node
+
+EXPOSE 3000
+
+CMD ["node", "dist/index.js"]

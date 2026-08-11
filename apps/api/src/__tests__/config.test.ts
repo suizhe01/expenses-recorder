@@ -129,4 +129,53 @@ describe('parseConfig', () => {
       expect(message).toContain('32');
     }
   });
+
+  /**
+   * EXP-23 AC-4. The parsing, not the wiring — the rate-limiter behaviour it
+   * drives is asserted in auth.test.ts.
+   */
+  describe('TRUST_PROXY', () => {
+    it('defaults to false when absent', () => {
+      expect(parseConfig(validEnv).TRUST_PROXY).toBe(false);
+    });
+
+    it('treats an empty string as absent, like the optional API keys', () => {
+      expect(parseConfig({ ...validEnv, TRUST_PROXY: '' }).TRUST_PROXY).toBe(
+        false,
+      );
+    });
+
+    it('parses "true" as true', () => {
+      expect(
+        parseConfig({ ...validEnv, TRUST_PROXY: 'true' }).TRUST_PROXY,
+      ).toBe(true);
+    });
+
+    /**
+     * The load-bearing case, and the reason this is an enum rather than
+     * `z.coerce.boolean()`. Coercion goes by JavaScript truthiness, so the
+     * non-empty string "false" becomes `true` — the configuration would read
+     * as off while the API trusted a spoofable header. Every other assertion
+     * in this block passes under that bug; only this one fails.
+     */
+    it('parses "false" as false, not as a truthy string', () => {
+      expect(
+        parseConfig({ ...validEnv, TRUST_PROXY: 'false' }).TRUST_PROXY,
+      ).toBe(false);
+    });
+
+    it('rejects any other value and names the variable', () => {
+      for (const value of ['1', '0', 'yes', 'no', 'TRUE', 'on']) {
+        try {
+          parseConfig({ ...validEnv, TRUST_PROXY: value });
+          expect.unreachable(`parseConfig should have thrown for "${value}"`);
+        } catch (error) {
+          expect(error).toBeInstanceOf(ConfigError);
+          expect((error as ConfigError).issues.join('\n')).toContain(
+            'TRUST_PROXY',
+          );
+        }
+      }
+    });
+  });
 });
