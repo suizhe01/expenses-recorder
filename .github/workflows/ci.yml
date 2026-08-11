@@ -36,6 +36,9 @@ jobs:
       # Deliberately no RESEND_API_KEY: CI must never make network calls, so the
       # console transport is always selected.
       MAIL_FROM: ci@example.com
+      # EXP-23 AC-4. Explicitly off, matching a directly-reachable API. The
+      # config tests set it per-case rather than relying on this.
+      TRUST_PROXY: 'false'
       # A scratch directory inside the runner workspace; the integration
       # suites override it per-test with a temporary directory anyway.
       RECEIPTS_PATH: ${{ github.workspace }}/ci-receipts
@@ -97,3 +100,42 @@ jobs:
 
       - name: Migrate down
         run: npm run migrate:down --workspace apps/api
+
+      # EXP-23 AC-9. The production image is only exercised at deploy time,
+      # which is the worst moment to discover the multi-stage build or
+      # `npm run build` has rotted. This builds it on every PR.
+      #
+      # amd64 only — the runner's architecture. The deploy target is arm64,
+      # and cross-building it here would need qemu and minutes of emulation for
+      # a check whose job is to catch broken Dockerfile and TypeScript build
+      # steps, neither of which is architecture-specific.
+      - name: Build production image
+        run: docker build -f apps/api/Dockerfile.prod -t expenses-api:ci .
+
+      # The image is worth nothing if it cannot start. `node dist/index.js`
+      # exits non-zero on a config error, so a missing variable, a broken
+      # import path or an unresolvable dist entry point all surface here
+      # rather than on the VPS.
+      - name: Production image starts and validates its config
+        run: |
+          # No DATABASE_URL: the process must refuse to start AND name the
+          # variable. Proves the entry point runs at all.
+          output=$(docker run --rm -e JWT_SECRET=ci-only-secret-not-used-outside-github-actions \
+            -e PUBLIC_BASE_URL=http://localhost:3000 \
+            expenses-api:ci 2>&1 || true)
+          echo "$output"
+          echo "$output" | grep -q 'DATABASE_URL'
+
+      # AC-2. The migration CLI must be present in the production image, or the
+      # runbook's explicit migrate step is impossible.
+      #
+      # --network none is load-bearing. `npx node-pg-migrate` was the obvious
+      # check and it is worthless: when the package is absent npx silently
+      # DOWNLOADS it and reports success, which is exactly what happened while
+      # the lockfile still had node-pg-migrate marked dev and `npm ci
+      # --omit=dev` was skipping it. Resolving it with no network available
+      # fails when it is genuinely missing.
+      - name: Production image carries the migration CLI
+        run: |
+          docker run --rm --network none expenses-api:ci \
+            node -e "console.log(require.resolve('node-pg-migrate'))"

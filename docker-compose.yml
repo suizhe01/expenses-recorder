@@ -47,6 +47,10 @@ services:
       # Deliberately NOT part of the zod config schema: this is a runtime
       # property of the container, not application configuration.
       TZ: UTC
+      # EXP-23 AC-4. Off in development: nothing proxies this stack, so a
+      # forwarded header would be pure client input. The production file turns
+      # it on, where a reverse proxy really is in front.
+      TRUST_PROXY: ${TRUST_PROXY:-false}
       # Inside the compose network Postgres is reachable on its service name
       # and container port, regardless of the host port mapping above.
       DATABASE_URL: postgres://${POSTGRES_USER:-expenses}:${POSTGRES_PASSWORD:-expenses}@postgres:5432/${POSTGRES_DB:-expenses}

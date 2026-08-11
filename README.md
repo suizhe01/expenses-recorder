@@ -95,6 +95,7 @@ starts half-configured.
 | `DATABASE_URL` | **yes** | — | Postgres connection string. Must start `postgres://` or `postgresql://` |
 | `JWT_SECRET` | **yes** | — | HS256 signing key for access tokens. Minimum 32 characters. Changing it invalidates every issued access token |
 | `PUBLIC_BASE_URL` | **yes** | — | Absolute `http://` or `https://` origin the API is reached on. Used to build verification links |
+| `TRUST_PROXY` | no | `false` | Exactly `true` or `false`. Believe `X-Forwarded-For` when setting the client address the rate limiter keys on. Only turn on behind a reverse proxy that is the sole route to the API — see [docs/deploy.md](docs/deploy.md) |
 | `RESEND_API_KEY` | no | — | Resend API key. Unset (or empty) selects the console transport, which logs the link instead of sending |
 | `MAIL_FROM` | no | `onboarding@resend.dev` | Sender address. Must be a valid email |
 | `RECEIPTS_PATH` | no | `./data/receipts` | Directory receipt images are written to. Compose overrides it with the `receipts-data` volume |

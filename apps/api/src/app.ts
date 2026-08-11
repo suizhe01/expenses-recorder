@@ -54,6 +54,16 @@ export function buildApp({
 }: BuildAppOptions): FastifyInstance {
   const app = Fastify({
     logger: { level: config.LOG_LEVEL },
+    // EXP-23 AC-5. Behind the Tailscale Funnel every request reaches the API
+    // from the local proxy, so `request.ip` is the same address for everyone
+    // and the rate limiter below — which keys on it — would collapse into a
+    // single global bucket: one noisy client would lock everyone out of login.
+    //
+    // Trusting the header is only safe because the production compose file
+    // publishes the API on 127.0.0.1 (AC-3), so nothing but the proxy can
+    // reach it and no outside caller is in a position to forge one. Left off
+    // by default for exactly that reason — see the note in config.ts.
+    trustProxy: config.TRUST_PROXY,
   });
 
   // EXP-14 AC-2 to AC-4. Set on the root instance, so every scope below
@@ -121,10 +131,10 @@ export function buildApp({
     },
   });
 
-  // AC-2: the browsable UI is development-only. The deploy runbook puts this
-  // API on a public Cloudflare Tunnel, where /docs would hand anyone who found
-  // it a complete map of the auth surface. The document itself stays available
-  // for codegen through `npm run openapi`, which needs no server.
+  // AC-2: the browsable UI is development-only. The deploy runbook (EXP-23)
+  // puts this API on a public Tailscale Funnel, where /docs would hand anyone
+  // who found it a complete map of the auth surface. The document itself stays
+  // available for codegen through `npm run openapi`, which needs no server.
   if (config.NODE_ENV !== 'production') {
     app.register(fastifySwaggerUi, { routePrefix: '/docs' });
   }

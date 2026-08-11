@@ -589,3 +589,95 @@ describe('rate limiting', () => {
     }
   });
 });
+
+/**
+ * EXP-23 AC-5. Which address the limiter buckets by.
+ *
+ * Behind the Tailscale Funnel every request reaches the API from the same
+ * local proxy, so without `TRUST_PROXY` the 10/min auth limit stops being
+ * per-client and becomes one bucket for the whole internet — a single stuck
+ * client would lock the owner out of login. With it on, the forwarded address
+ * is used instead.
+ *
+ * `/auth/verify` is the probe rather than `/auth/login`: it sits in the same
+ * rate-limited scope but does no scrypt work, so eleven of them cost
+ * milliseconds instead of seconds. It answers 400 (HTML) for a bad token,
+ * which is what "not limited" looks like here.
+ */
+describe('TRUST_PROXY and rate-limit bucketing', () => {
+  const LIMIT = 10;
+
+  function configWith(trustProxy: string) {
+    return parseConfig({
+      ...process.env,
+      JWT_SECRET: 'test-secret-at-least-thirty-two-chars',
+      PUBLIC_BASE_URL: 'http://localhost:3000',
+      LOG_LEVEL: 'silent',
+      TRUST_PROXY: trustProxy,
+    });
+  }
+
+  /**
+   * Sends `LIMIT + 1` requests. `forwardedFor` receives the request number, so
+   * returning a constant models one client and returning something varying
+   * models that many distinct ones.
+   */
+  async function hammer(
+    instance: FastifyInstance,
+    forwardedFor: (index: number) => string,
+  ): Promise<number[]> {
+    const statuses: number[] = [];
+
+    for (let i = 0; i < LIMIT + 1; i += 1) {
+      const response = await instance.inject({
+        method: 'GET',
+        url: '/auth/verify?token=not-a-real-token',
+        headers: { 'x-forwarded-for': forwardedFor(i) },
+      });
+      statuses.push(response.statusCode);
+    }
+
+    return statuses;
+  }
+
+  it('buckets by the forwarded address when TRUST_PROXY is on', async () => {
+    const proxied = buildApp({ config: configWith('true'), database });
+    await proxied.ready();
+
+    try {
+      const statuses = await hammer(proxied, (i) => `203.0.113.${i}`);
+      expect(statuses).not.toContain(429);
+    } finally {
+      await proxied.close();
+    }
+  });
+
+  it('still limits one forwarded client when TRUST_PROXY is on', async () => {
+    const proxied = buildApp({ config: configWith('true'), database });
+    await proxied.ready();
+
+    try {
+      const statuses = await hammer(proxied, () => '203.0.113.9');
+      expect(statuses.at(-1)).toBe(429);
+    } finally {
+      await proxied.close();
+    }
+  });
+
+  /**
+   * The direction that matters for security: with the flag off the header is
+   * client-supplied noise. Were it honoured anyway, varying it would be all it
+   * took to evade the limit entirely — so this asserts the limit still bites.
+   */
+  it('ignores the forwarded address when TRUST_PROXY is off', async () => {
+    const direct = buildApp({ config: configWith('false'), database });
+    await direct.ready();
+
+    try {
+      const statuses = await hammer(direct, (i) => `203.0.113.${i}`);
+      expect(statuses.at(-1)).toBe(429);
+    } finally {
+      await direct.close();
+    }
+  });
+});
