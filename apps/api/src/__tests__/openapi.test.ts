@@ -5,6 +5,8 @@ import { buildApp } from '../app.js';
 import { parseConfig, type Config } from '../config.js';
 import { createDatabase, type Database } from '../db.js';
 import type { EmailTransport } from '../email/transport.js';
+import { REQUEST_SCHEMAS } from '../openapi/request-schemas.js';
+import { methodsOf, routeKey } from '../openapi/transform.js';
 
 const base = {
   ...process.env,
@@ -206,6 +208,228 @@ describe('AC-2: Swagger UI is development-only', () => {
     } finally {
       await productionApp.close();
     }
+  });
+});
+
+/**
+ * EXP-22 — documentation-only request bodies and query parameters.
+ *
+ * The whole approach rests on one fact: what `transform` returns builds the
+ * document and nothing else. `AC-11` below is the test that keeps proving it,
+ * and it matters far more than the shape assertions — if the assumption broke,
+ * the symptom would not be a wrong document but four silently broken security
+ * behaviours, which is exactly what the abandoned `openapi-docs-wip` branch did.
+ */
+describe('EXP-22: documented requests', () => {
+  const BODY_ROUTES = [
+    ['post', '/auth/register'],
+    ['post', '/auth/login'],
+    ['post', '/auth/refresh'],
+    ['post', '/auth/logout'],
+    ['post', '/auth/resend-verification'],
+    ['post', '/auth/forgot-password'],
+    ['post', '/auth/reset-password'],
+    ['post', '/categories'],
+    ['patch', '/categories/{id}'],
+    ['post', '/expenses'],
+    ['patch', '/expenses/{id}'],
+    ['post', '/receipts'],
+  ] as const;
+
+  const DELETE_ROUTES = [
+    '/categories/{id}',
+    '/expenses/{id}',
+    '/receipts/{id}',
+  ] as const;
+
+  const FILTER_ROUTES = [
+    '/expenses',
+    '/expenses/export.csv',
+    '/expenses/export.zip',
+  ] as const;
+
+  type Operation = {
+    requestBody?: { content: Record<string, { schema?: Record<string, unknown> }> };
+    parameters?: { in: string; name: string; schema?: { type?: string } }[];
+  };
+
+  function operation(path: string, method: string): Operation {
+    const doc = app.swagger() as unknown as {
+      paths: Record<string, Record<string, Operation>>;
+    };
+    const found = doc.paths[path]?.[method];
+
+    if (!found) {
+      throw new Error(`no ${method.toUpperCase()} ${path} in the document`);
+    }
+
+    return found;
+  }
+
+  /**
+   * AC-9. Both directions, driven off the app's real route table.
+   *
+   * An `onRoute` hook on the root instance also fires for routes registered in
+   * the encapsulated scopes below it, which is how this sees all of them.
+   * Fastify adds a HEAD route for every GET, so those are excluded alongside GET.
+   */
+  it('AC-9: every non-GET route is documented, and every entry is a real route', async () => {
+    const seen: string[] = [];
+    const probe = buildApp({
+      config: development,
+      database,
+      emailTransport: silentTransport,
+    });
+
+    probe.addHook('onRoute', (route) => {
+      for (const method of methodsOf(route)) {
+        seen.push(routeKey(method, route.url));
+      }
+    });
+    await probe.ready();
+
+    try {
+      const documented = Object.keys(REQUEST_SCHEMAS).sort();
+      const needing = seen
+        .filter((key) => !key.startsWith('GET ') && !key.startsWith('HEAD '))
+        .sort();
+
+      // Nothing registered is missing from the map...
+      expect(needing).toEqual(documented);
+      // ...which, being an equality, also proves no entry names a dead route.
+      expect(needing.length).toBe(15);
+    } finally {
+      await probe.close();
+    }
+  });
+
+  it('AC-3, AC-10: the twelve body-taking routes have a requestBody', () => {
+    for (const [method, path] of BODY_ROUTES) {
+      const body = operation(path, method).requestBody;
+
+      expect(body, `${method.toUpperCase()} ${path}`).toBeTruthy();
+    }
+  });
+
+  it('AC-4, AC-10: the three DELETE routes have none', () => {
+    for (const path of DELETE_ROUTES) {
+      expect(operation(path, 'delete').requestBody, path).toBeUndefined();
+    }
+  });
+
+  it('AC-5: content types match what each route actually accepts', () => {
+    const contentOf = (path: string, method: string) =>
+      Object.keys(operation(path, method).requestBody?.content ?? {});
+
+    expect(contentOf('/receipts', 'post')).toEqual(['multipart/form-data']);
+    expect(contentOf('/auth/reset-password', 'post')).toEqual([
+      'application/x-www-form-urlencoded',
+    ]);
+    expect(contentOf('/expenses', 'post')).toEqual(['application/json']);
+    expect(contentOf('/auth/login', 'post')).toEqual(['application/json']);
+  });
+
+  it('AC-5: the upload declares a binary file field, so the UI renders a picker', () => {
+    const schema = operation('/receipts', 'post').requestBody?.content[
+      'multipart/form-data'
+    ]?.schema as { properties?: Record<string, { format?: string }> };
+
+    expect(schema?.properties?.file?.format).toBe('binary');
+  });
+
+  it('AC-6: every JSON body carries an example for Try-it-out to prefill', () => {
+    for (const [method, path] of BODY_ROUTES) {
+      const content = operation(path, method).requestBody?.content ?? {};
+      const json = content['application/json'];
+
+      if (!json) {
+        continue;
+      }
+
+      expect(json.schema?.example, `${method.toUpperCase()} ${path}`).toBeTruthy();
+    }
+  });
+
+  it('AC-7: the three filter routes document all four filters', () => {
+    for (const path of FILTER_ROUTES) {
+      const query = (operation(path, 'get').parameters ?? []).filter(
+        (parameter) => parameter.in === 'query',
+      );
+      const names = query.map((parameter) => parameter.name).sort();
+
+      expect(names, path).toEqual(['categoryId', 'from', 'hasReceipt', 'to']);
+
+      // Repeatable, which is what makes the UI offer more than one value.
+      const categoryId = query.find((parameter) => parameter.name === 'categoryId');
+      expect(categoryId?.schema?.type, path).toBe('array');
+    }
+  });
+
+  it('AC-8: the emailed-link routes document their token', () => {
+    for (const path of ['/auth/verify', '/auth/reset-password'] as const) {
+      const names = (operation(path, 'get').parameters ?? [])
+        .filter((parameter) => parameter.in === 'query')
+        .map((parameter) => parameter.name);
+
+      expect(names, path).toContain('token');
+    }
+  });
+});
+
+/**
+ * EXP-22 AC-11 — the guarantee the whole issue rests on.
+ *
+ * Documenting a body must not enforce it. Each request below violates the
+ * schema the document now advertises, and each must be answered by the route's
+ * own zod parsing rather than by Fastify's validator. Every one of these is 400
+ * the moment a real `body` schema is declared on the route.
+ */
+describe('AC-11: documenting a body does not enable validation', () => {
+  it('login still answers 401 for an empty body, not 400', async () => {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/auth/login',
+      payload: {},
+    });
+
+    expect(response.statusCode).toBe(401);
+  });
+
+  it('register still answers 400 from zod, with a fields object', async () => {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/auth/register',
+      payload: { email: 'not-an-email', password: 'short' },
+    });
+
+    // Fastify's validator would answer `{statusCode, error, message}`; this is
+    // the repo's own shape, which proves the handler ran.
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toHaveProperty('fields');
+    expect(response.json()).toMatchObject({ error: 'Validation failed' });
+  });
+
+  it('a wrongly typed expense field reaches the handler', async () => {
+    // No token, so the guard answers first — 401 rather than Fastify's 400 is
+    // itself the evidence: validation would have run before the preHandler.
+    const response = await app.inject({
+      method: 'POST',
+      url: '/expenses',
+      payload: { totalCents: 'not-a-number', categoryId: 'nope' },
+    });
+
+    expect(response.statusCode).toBe(401);
+  });
+
+  it('the upload route still refuses a non-multipart body its own way', async () => {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/receipts',
+      payload: { file: 'not a file at all' },
+    });
+
+    // 401 from the guard, never a 415 or 400 from a schema.
+    expect(response.statusCode).toBe(401);
   });
 });
 

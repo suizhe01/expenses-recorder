@@ -15,6 +15,7 @@ import { registerResetPasswordRoutes } from './routes/reset-password.js';
 import { registerCategoryRoutes } from './routes/categories.js';
 import { registerReceiptRoutes } from './routes/receipts.js';
 import { registerExpenseRoutes } from './routes/expenses.js';
+import { documentRequests } from './openapi/transform.js';
 import { createConsoleTransport, type EmailTransport } from './email/transport.js';
 import { createResendTransport } from './email/resend.js';
 import {
@@ -85,6 +86,12 @@ export function buildApp({
   // EXP-11 AC-1. Generating the document registers no routes of its own, so
   // this is safe in every environment; only the UI below is gated.
   app.register(fastifySwagger, {
+    // EXP-22 AC-1. Documentation-only request bodies and query parameters.
+    // What this returns is used to build the document and nothing else — the
+    // route schemas Fastify compiled its validators from are untouched, which
+    // is what lets the document describe a body while EXP-11's ban on `body`
+    // schemas still holds.
+    transform: documentRequests,
     openapi: {
       // 3.1.0 rather than the plugin's 3.0.3 default. Fastify's schemas are
       // JSON Schema, and 3.1 is the OpenAPI version aligned with it — 3.0.x
