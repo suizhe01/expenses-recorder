@@ -15,11 +15,19 @@ WORKDIR /app
 
 COPY package.json package-lock.json* ./
 COPY apps/api/package.json ./apps/api/
+COPY apps/web/package.json ./apps/web/
 RUN npm ci
 
 COPY apps/api ./apps/api
+COPY apps/web ./apps/web
 
 WORKDIR /app/apps/api
+RUN npm run build
+
+# EXP-25 AC-8. The web build, in the same stage so its toolchain — Vite,
+# Tailwind, TypeScript — stays out of the runtime image. Without this the API
+# serves nothing at its own origin and the deployment is a 404.
+WORKDIR /app/apps/web
 RUN npm run build
 
 # ---------------------------------------------------------------------------
@@ -45,6 +53,10 @@ COPY apps/api/package.json ./apps/api/
 RUN npm ci --omit=dev && npm cache clean --force
 
 COPY --from=build /app/apps/api/dist ./apps/api/dist
+
+# AC-7 resolves this path relative to apps/api/dist/web.js, so the layout here
+# has to match the repository's: apps/web/dist beside apps/api/dist.
+COPY --from=build /app/apps/web/dist ./apps/web/dist
 
 # The migration CLI reads these at runtime; they are not part of the build.
 COPY apps/api/migrations ./apps/api/migrations
