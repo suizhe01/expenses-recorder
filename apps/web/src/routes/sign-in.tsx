@@ -1,5 +1,7 @@
 import { useState, type FormEvent } from 'react';
+import { Link, useNavigate } from 'react-router';
 import { useSession } from '@/session/context';
+import { EMAIL_NOT_VERIFIED } from '@/api/auth';
 import { describeFailure } from '@/api/messages';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -24,6 +26,7 @@ import {
  */
 export function SignInScreen() {
   const { state, session } = useSession();
+  const navigate = useNavigate();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | undefined>(undefined);
@@ -47,15 +50,26 @@ export function SignInScreen() {
       return;
     }
 
+    if (
+      result.kind === 'error' &&
+      result.status === 403 &&
+      result.code === EMAIL_NOT_VERIFIED
+    ) {
+      navigate(`/check-email?email=${encodeURIComponent(email.trim())}`);
+      return;
+    }
+
     // signInSafe collapses every 401 to one message — see api/messages.ts.
     setError(describeFailure(result, { signInSafe: true }));
   }
 
   return (
-    <main className="flex min-h-dvh items-center justify-center p-4">
+    <main className="flex min-h-dvh w-full items-center justify-center overflow-x-hidden p-4">
       <Card className="w-full max-w-sm">
         <CardHeader>
-          <CardTitle>Sign in</CardTitle>
+          <CardTitle role="heading" aria-level={1}>
+            Sign in
+          </CardTitle>
           <CardDescription>Expenses Recorder</CardDescription>
         </CardHeader>
 
@@ -83,6 +97,7 @@ export function SignInScreen() {
                 value={email}
                 onChange={(event) => setEmail(event.target.value)}
                 placeholder="you@example.com"
+                className="h-11"
               />
             </div>
 
@@ -94,6 +109,7 @@ export function SignInScreen() {
                 autoComplete="current-password"
                 value={password}
                 onChange={(event) => setPassword(event.target.value)}
+                className="h-11"
               />
             </div>
 
@@ -101,6 +117,16 @@ export function SignInScreen() {
             <Button type="submit" disabled={busy} className="h-11 w-full">
               {busy ? 'Signing in…' : 'Sign in'}
             </Button>
+
+            <p className="text-muted-foreground text-center text-sm">
+              No account?{' '}
+              <Link
+                to="/sign-up"
+                className="inline-flex min-h-11 items-center font-medium text-foreground underline underline-offset-4"
+              >
+                Create one
+              </Link>
+            </p>
           </form>
         </CardContent>
       </Card>

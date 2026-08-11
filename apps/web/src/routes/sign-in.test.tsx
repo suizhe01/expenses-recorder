@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter } from 'react-router';
+import { MemoryRouter, Route, Routes } from 'react-router';
 import { createClient } from '@/api/client';
 import { createAuthApi } from '@/api/auth';
 import { createSessionManager } from '@/session/session';
@@ -21,7 +21,10 @@ function mount(routes: Parameters<typeof fakeTransport>[0]) {
   render(
     <SessionProvider manager={manager}>
       <MemoryRouter>
-        <SignInScreen />
+        <Routes>
+          <Route path="/" element={<SignInScreen />} />
+          <Route path="/check-email" element={<p>Check email destination</p>} />
+        </Routes>
       </MemoryRouter>
     </SessionProvider>,
   );
@@ -98,6 +101,19 @@ describe('sign in (AC-5)', () => {
     expect(
       await screen.findByText('Too many attempts. Try again in 45 seconds.'),
     ).toBeInTheDocument();
+  });
+
+  it('routes an unverified account to check-email', async () => {
+    mount({
+      '/auth/login': {
+        status: 403,
+        body: { error: 'Email not verified', code: 'EMAIL_NOT_VERIFIED' },
+      },
+    });
+
+    await signIn();
+
+    expect(await screen.findByText('Check email destination')).toBeInTheDocument();
   });
 
   it('reports being unable to reach the server distinctly from a rejection', async () => {
