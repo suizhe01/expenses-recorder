@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
+import { TabBar } from '@/components/tab-bar';
 
 const MAX_BYTES = 10 * 1024 * 1024;
 const ALLOWED_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif']);
@@ -153,14 +154,15 @@ export function HomeScreen({ receiptsApi }: { receiptsApi?: ReceiptsApi } = {}) 
         ) : <div className="grid gap-2">{receipts.map((receipt) => <ReceiptRow key={receipt.id} receipt={receipt} fresh={receipt.id === newId} onDelete={() => setDeleting(receipt)} />)}</div>}
       </section>
 
-      <section className="fixed inset-x-0 bottom-0 z-20 border-t bg-background/95 px-4 pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] backdrop-blur dark:border-border dark:bg-background/95">
-        <div className="mx-auto grid h-32 w-full max-w-xl grid-cols-[5rem_1fr] items-center gap-3 rounded-xl border bg-card p-3 dark:border-border">
+      <section className="fixed inset-x-0 bottom-16 z-20 px-4 pb-3">
+        <div className="mx-auto grid h-32 w-full max-w-xl grid-cols-[5rem_1fr] items-center gap-3 rounded-xl border bg-card p-3 shadow-sm dark:border-border">
           {preview ? <img src={preview} alt="Selected receipt preview" className="h-24 w-20 rounded-lg object-cover" /> : <div className="flex h-24 w-20 items-center justify-center rounded-lg bg-muted dark:bg-muted/70"><Upload aria-hidden="true" /></div>}
           <div aria-live="polite" className="min-w-0">
             {uploading ? <p className="flex items-center gap-2 text-sm font-medium"><LoaderCircle className="size-4 animate-spin" aria-hidden="true" />Reading your receipt…</p> : notice ? <div role={notice.alert ? 'alert' : undefined}><p className={cn('line-clamp-2 text-sm', notice.alert ? 'text-destructive' : 'text-foreground')}>{notice.text}</p>{notice.offline ? <div className="mt-2 flex gap-2"><Button className="h-11" onClick={() => file && void upload(file)}>Retry</Button><Button variant="outline" className="h-11" onClick={discard}>Discard</Button></div> : <label htmlFor="receipt-file" className="mt-2 inline-flex min-h-11 cursor-pointer items-center justify-center rounded-lg bg-primary px-4 text-sm font-medium text-primary-foreground focus-within:ring-3 focus-within:ring-ring/50">Add another<input ref={input} id="receipt-file" className="sr-only" type="file" accept="image/*" onClick={(event) => { event.currentTarget.value = ''; }} onChange={(event) => { const next = event.target.files?.[0]; if (next) choose(next); }} /></label>}</div> : <><label htmlFor="receipt-file" className="inline-flex min-h-11 cursor-pointer items-center justify-center rounded-lg bg-primary px-4 text-sm font-medium text-primary-foreground focus-within:ring-3 focus-within:ring-ring/50">Add receipt<input ref={input} id="receipt-file" className="sr-only" type="file" accept="image/*" onClick={(event) => { event.currentTarget.value = ''; }} onChange={(event) => { const next = event.target.files?.[0]; if (next) choose(next); }} /></label><p className="mt-1 text-xs text-muted-foreground">JPEG, PNG, WebP or HEIC · 10 MB max</p></>}
           </div>
         </div>
       </section>
+      <TabBar active="inbox" />
 
       <Dialog open={deleting !== undefined} onOpenChange={(open) => { if (!open) { setDeleting(undefined); setDeleteError(undefined); } }}>
         <DialogContent><DialogHeader><DialogTitle>Delete receipt?</DialogTitle><DialogDescription>Delete this receipt? It leaves your inbox.</DialogDescription></DialogHeader>{deleteError && <Alert variant="destructive"><AlertDescription>{deleteError}</AlertDescription></Alert>}<DialogFooter><DialogClose asChild><Button variant="outline">Cancel</Button></DialogClose><Button variant="destructive" onClick={() => void remove()}>Delete</Button></DialogFooter></DialogContent>
