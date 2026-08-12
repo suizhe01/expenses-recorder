@@ -70,8 +70,8 @@ export function ConfirmReceiptScreen() {
   const e=receipt.extraction; const unread=!e||e.status==='failed'||e.status==='skipped';
   return <main className="mx-auto min-h-dvh w-full max-w-xl px-4 pb-28"><header className="flex items-center gap-2 py-3"><Button type="button" variant="ghost" size="icon" className="size-11" onClick={()=>navigate('/')} aria-label="Back"><ChevronLeft/></Button><h1 className="font-heading text-lg font-semibold">Confirm receipt</h1></header>
     {image?<button type="button" className="mb-5 block min-h-44 w-full overflow-hidden rounded-xl bg-muted" onClick={()=>setPreview(true)}><img className="max-h-80 w-full object-contain" src={image} alt="Receipt"/></button>:imageUnavailable?<div className="mb-5 flex min-h-44 items-center justify-center rounded-xl bg-muted text-sm text-muted-foreground">Receipt image is unavailable</div>:null}
-    {unread&&<p className="mb-4 text-sm text-muted-foreground">We couldn't read this receipt. Fill in the details below.</p>}
-    {e?.isReceipt===false&&<Alert className="mb-4"><AlertDescription>This may not be a receipt. Check the details before filing.</AlertDescription></Alert>}
+    {unread&&<p className="mb-4 text-sm text-muted-foreground">We couldn't read this receipt — enter the details yourself.</p>}
+    {e?.isReceipt===false&&<Alert className="mb-4"><AlertDescription>This doesn't look like a receipt. Check the photo before saving.</AlertDescription></Alert>}
     {errors.form&&<Alert variant="destructive" className="mb-4" role="alert"><AlertDescription>{errors.form}</AlertDescription></Alert>}
     <form onSubmit={save} className="grid gap-4"><Field label="Category" error={errors.categoryId}><select aria-label="Category" value={fields.categoryId} onChange={(x)=>change('categoryId',x.target.value)} className="h-11 w-full rounded-lg border bg-background px-2.5 text-base"><option value="">Choose a category</option>{categories.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></Field>
       <Field label="Total" error={errors.totalCents}><Input aria-label="Total" inputMode="decimal" value={fields.total} onChange={x=>change('total',x.target.value)}/></Field>
