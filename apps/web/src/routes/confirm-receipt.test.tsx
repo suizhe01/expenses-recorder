@@ -91,9 +91,54 @@ describe('confirm receipt', () => {
     await waitFor(() => expect(calls).toContain('POST /expenses'));
     const request = (fetch as ReturnType<typeof vi.fn>).mock.calls.find(([url, init]) => new URL(url, 'http://test.local').pathname === '/expenses' && init?.method === 'POST');
     expect(JSON.parse((request?.[1] as RequestInit).body as string).items).toEqual([
-      { description: 'Rice', quantity: '1', unitPriceCents: 500, lineTotalCents: 400 },
-      { description: 'Tea', quantity: '2', unitPriceCents: 250, lineTotalCents: 500 },
+      { description: 'Rice', quantity: '1', unitPriceCents: 500, lineTotalCents: 400, components: [] },
+      { description: 'Tea', quantity: '2', unitPriceCents: 250, lineTotalCents: 500, components: [] },
     ]);
+  });
+
+  it('EXP-44 AC-1 to AC-6: edits collapsed components, reconciles their totals, and saves nested items', async () => {
+    const extracted = {
+      ...receipt,
+      extraction: {
+        status: 'succeeded', isReceipt: true, merchantName: 'Pokemist', purchasedOn: '2026-08-12',
+        totalCents: 5570, subtotalCents: 5570, currency: 'MYR',
+        items: [{ description: 'Cajun Chicken', quantity: '3', unitPriceCents: 1790, lineTotalCents: 5370, components: [{ description: 'Add Rice', quantity: '2', unitPriceCents: 100, lineTotalCents: 200 }] }],
+      },
+    };
+    const { calls } = await mount(503, { status: 201, body: { id: 'expense-1' } }, false, extracted);
+    const summary = await screen.findByRole('button', { name: '1 component' });
+    expect(summary).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByLabelText('Component 1 description')).not.toBeInTheDocument();
+    await userEvent.click(summary);
+    expect(screen.getByLabelText('Component 1 description')).toHaveValue('Add Rice');
+    expect(screen.queryByText(/Item line totals do not match/)).not.toBeInTheDocument();
+    await userEvent.clear(screen.getByLabelText('Component 1 line total'));
+    await userEvent.type(screen.getByLabelText('Component 1 line total'), '1.00');
+    expect(screen.getByText(/Item line totals do not match/)).toBeInTheDocument();
+    await userEvent.selectOptions(screen.getByLabelText('Category'), category.id);
+    await userEvent.click(screen.getByRole('button', { name: 'Save expense' }));
+    await waitFor(() => expect(calls).toContain('POST /expenses'));
+    const request = (fetch as ReturnType<typeof vi.fn>).mock.calls.find(([url, init]) => new URL(url, 'http://test.local').pathname === '/expenses' && init?.method === 'POST');
+    expect(JSON.parse((request?.[1] as RequestInit).body as string).items).toEqual([{ description: 'Cajun Chicken', quantity: '3', unitPriceCents: 1790, lineTotalCents: 5370, components: [{ description: 'Add Rice', quantity: '2', unitPriceCents: 100, lineTotalCents: 100 }] }]);
+  });
+
+  it('EXP-44 AC-3, AC-5, AC-6: retains component-only items and blocks invalid component amounts', async () => {
+    const extracted = { ...receipt, extraction: { status: 'succeeded', isReceipt: true, merchantName: 'Set', purchasedOn: '2026-08-12', totalCents: 100, currency: 'MYR', items: [{ description: null, quantity: null, unitPriceCents: null, lineTotalCents: null, components: [{ description: 'Soup', quantity: null, unitPriceCents: null, lineTotalCents: null }] }] } };
+    const { calls } = await mount(503, { status: 201, body: { id: 'expense-1' } }, false, extracted);
+    await userEvent.click(await screen.findByRole('button', { name: '1 component' }));
+    await userEvent.clear(screen.getByLabelText('Component 1 unit price'));
+    await userEvent.type(screen.getByLabelText('Component 1 unit price'), '1.234');
+    await userEvent.selectOptions(screen.getByLabelText('Category'), category.id);
+    await userEvent.click(screen.getByRole('button', { name: 'Save expense' }));
+    expect(await screen.findByText('Use a valid amount with no more than 2 decimal places.')).toBeInTheDocument();
+    expect(calls).not.toContain('POST /expenses');
+    await userEvent.clear(screen.getByLabelText('Component 1 unit price'));
+    await userEvent.type(screen.getByLabelText('Component 1 unit price'), '1.00');
+    expect(screen.queryByText('Use a valid amount with no more than 2 decimal places.')).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Save expense' }));
+    await waitFor(() => expect(calls).toContain('POST /expenses'));
+    const request = (fetch as ReturnType<typeof vi.fn>).mock.calls.find(([url, init]) => new URL(url, 'http://test.local').pathname === '/expenses' && init?.method === 'POST');
+    expect(JSON.parse((request?.[1] as RequestInit).body as string).items).toEqual([{ description: null, quantity: null, unitPriceCents: null, lineTotalCents: null, components: [{ description: 'Soup', quantity: null, unitPriceCents: 100, lineTotalCents: null }] }]);
   });
 
   it('EXP-41 AC-1, AC-4: keeps no-item receipts clean and validates a manually added amount', async () => {

@@ -8,12 +8,14 @@ export type ExpenseValues = {
   items?: ExpenseItem[];
 };
 
-export type ExpenseItem = {
+export type ExpenseComponent = {
   description: string | null;
   quantity: string | null;
   unitPriceCents: number | null;
   lineTotalCents: number | null;
 };
+
+export type ExpenseItem = ExpenseComponent & { components?: ExpenseComponent[] };
 
 export type ExpenseInput = ExpenseValues & { receiptId?: string | null };
 
