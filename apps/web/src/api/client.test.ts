@@ -27,6 +27,17 @@ describe('parseRetryAfter (AC-8)', () => {
 });
 
 describe('client', () => {
+  it('passes FormData through without setting content-type', async () => {
+    const http = fakeTransport({ '/receipts': { status: 201, body: {} } });
+    const form = new FormData();
+    form.append('file', new File(['receipt'], 'receipt.jpg', { type: 'image/jpeg' }));
+
+    await createClient('', http.transport)('/receipts', { method: 'POST', body: form });
+
+    expect(http.calls[0]!.init.body).toBe(form);
+    expect((http.calls[0]!.init.headers as Record<string, string>)['content-type']).toBeUndefined();
+  });
+
   it('sends the bearer header only when a token is supplied', async () => {
     const http = fakeTransport({ '/auth/me': { status: 200, body: {} } });
     const request = createClient('', http.transport);

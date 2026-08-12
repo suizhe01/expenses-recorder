@@ -7,6 +7,17 @@ import { SessionProvider } from '@/session/context';
 import { createSessionManager, SESSION_ENDED } from '@/session/session';
 import { fakeStorage, fakeTransport, session } from '@/test/support';
 
+beforeEach(() => {
+  vi.stubGlobal('fetch', vi.fn(async () => new Response('[]', {
+    status: 200,
+    headers: { 'content-type': 'application/json' },
+  })));
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
 function mount(
   path: string,
   routes: Parameters<typeof fakeTransport>[0],
@@ -48,13 +59,17 @@ describe('route guards (AC-6)', () => {
       'stored-refresh',
     );
 
-    expect(await screen.findByText('Signed in')).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Receipts' })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Create account' })).not.toBeInTheDocument();
   });
 });
 
 describe('session expiry (AC-7)', () => {
   it('returns to sign-in with a reason when a live session ends', async () => {
+    vi.mocked(fetch).mockResolvedValue(new Response(
+      JSON.stringify({ error: 'Unauthorized' }),
+      { status: 401, headers: { 'content-type': 'application/json' } },
+    ));
     const active = session();
     mount(
       '/',
@@ -63,7 +78,6 @@ describe('session expiry (AC-7)', () => {
           { status: 200, body: active },
           { status: 401, body: { error: 'Invalid refresh token' } },
         ],
-        '/auth/me': { status: 401, body: { error: 'Unauthorized' } },
       },
       'stored-refresh',
     );

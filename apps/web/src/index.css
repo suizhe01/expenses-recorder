@@ -110,6 +110,11 @@
   }
 }
 
+@keyframes saved {
+  from { background-color: color-mix(in oklch, var(--accent), transparent 15%); }
+  to { background-color: var(--card); }
+}
+
 /*
  ---break---
  */

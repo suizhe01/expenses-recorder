@@ -84,7 +84,9 @@ export function createClient(baseUrl: string, transport: Transport) {
 
     const headers: Record<string, string> = { accept: 'application/json' };
 
-    if (body !== undefined) {
+    const isFormData = typeof FormData !== 'undefined' && body instanceof FormData;
+
+    if (body !== undefined && !isFormData) {
       headers['content-type'] = 'application/json';
     }
 
@@ -98,7 +100,7 @@ export function createClient(baseUrl: string, transport: Transport) {
       response = await transport(`${baseUrl}${path}`, {
         method,
         headers,
-        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        ...(body === undefined ? {} : { body: isFormData ? body : JSON.stringify(body) }),
       });
     } catch {
       // A DNS failure, a refused connection, aeroplane mode. Distinct from an
