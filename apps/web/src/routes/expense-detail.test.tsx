@@ -30,6 +30,8 @@ type Options = {
   remove?: ApiResult<void>;
   image?: ApiResult<Blob>;
   hold?: boolean;
+  /** What the API really does: the row is gone, so a second DELETE is a 404. */
+  deleteOnce?: boolean;
 };
 
 function Archive() {
@@ -43,7 +45,15 @@ async function mount(options: Options = {}) {
   const update = vi.fn<(token: string, id: string, body: ExpensePatch) => Promise<ApiResult<Expense>>>(async () => (
     options.hold ? new Promise<ApiResult<Expense>>(() => undefined) : options.update ?? { kind: 'ok', status: 200, body: row }
   ));
-  const remove = vi.fn(async (): Promise<ApiResult<void>> => options.remove ?? { kind: 'ok', status: 204, body: undefined as void });
+  let deletes = 0;
+  const remove = vi.fn(async (): Promise<ApiResult<void>> => {
+    deletes += 1;
+    if (options.deleteOnce) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      return deletes === 1 ? { kind: 'ok', status: 204, body: undefined as void } : { kind: 'error', status: 404, message: 'Expense not found' };
+    }
+    return options.remove ?? { kind: 'ok', status: 204, body: undefined as void };
+  });
   const image = vi.fn(async (): Promise<ApiResult<Blob>> => options.image ?? { kind: 'ok', status: 200, body: new Blob(['image']) });
   const list = vi.fn(async () => ({ kind: 'ok' as const, status: 200, body: categories }));
   const manager = createSessionManager({ auth: createAuthApi(createClient('', async () => new Response(JSON.stringify(session()), { status: 200 }))), storage: fakeStorage() });
@@ -155,6 +165,30 @@ describe('expense detail', () => {
     // Radix marks the body `pointer-events: none` while a modal is open, which
     // user-event refuses to click through.
     fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Delete' }));
+    expect(await screen.findByText('Archive: Expense deleted.')).toBeInTheDocument();
+    expect(remove).toHaveBeenCalledTimes(1);
+  });
+
+  it('makes exactly one DELETE for double taps, and never reports the deleted expense as missing', async () => {
+    const { remove } = await mount({ deleteOnce: true });
+    await userEvent.click(await screen.findByRole('button', { name: 'Delete' }));
+    const confirm = within(screen.getByRole('dialog')).getByRole('button', { name: 'Delete' });
+    // The dialog stays open for the whole round-trip, so the second tap lands
+    // on a live button. A second DELETE answers 404, and reporting that would
+    // say "Expense not found" about an expense that was just deleted.
+    await act(async () => { confirm.click(); confirm.click(); await new Promise((resolve) => setTimeout(resolve, 40)); });
+    expect(remove).toHaveBeenCalledTimes(1);
+    expect(await screen.findByText('Archive: Expense deleted.')).toBeInTheDocument();
+    expect(screen.queryByText(/not found/)).not.toBeInTheDocument();
+  });
+
+  it('disables the confirmation while the delete is in flight', async () => {
+    // The ref covers two taps in one tick; this covers the taps a real slow
+    // connection allows, seconds apart, where a render has happened between.
+    const { remove } = await mount({ deleteOnce: true });
+    await userEvent.click(await screen.findByRole('button', { name: 'Delete' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Delete' }));
+    expect(within(screen.getByRole('dialog')).getByRole('button', { name: 'Deleting…' })).toBeDisabled();
     expect(await screen.findByText('Archive: Expense deleted.')).toBeInTheDocument();
     expect(remove).toHaveBeenCalledTimes(1);
   });
