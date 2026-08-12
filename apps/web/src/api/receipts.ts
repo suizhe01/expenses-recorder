@@ -2,10 +2,18 @@ import type { ApiRequest, ApiResult } from './client';
 
 export type Extraction = {
   status: string;
+  isReceipt?: boolean | null;
   merchantName: string | null;
+  merchantTaxId?: string | null;
+  receiptNumber?: string | null;
   purchasedOn: string | null;
+  purchasedAtTime?: string | null;
+  subtotalCents?: number | null;
+  taxCents?: number | null;
+  roundingCents?: number | null;
   totalCents: number | null;
   currency: string | null;
+  paymentMethod?: string | null;
 };
 
 export type Receipt = {
@@ -30,6 +38,9 @@ export function createReceiptsApi(request: ApiRequest) {
     },
     remove(accessToken: string, id: string): Promise<ApiResult<void>> {
       return request<void>(`/receipts/${id}`, { method: 'DELETE', accessToken });
+    },
+    image(accessToken: string, id: string): Promise<ApiResult<Blob>> {
+      return request<Blob>(`/receipts/${id}/file`, { accessToken, responseType: 'blob' });
     },
   };
 }
