@@ -188,7 +188,7 @@ cp .env.example .env && docker compose up -d --build
 cd apps/api
 npm run migrate          # then: lint, typecheck, test, build
 npm run openapi          # writes openapi.json, no server or secrets needed
-npm run prune:sessions   # maintenance, nothing schedules it
+npm run prune:auth-artifacts   # maintenance, nothing schedules it
 ```
 
 Two container traps, both hit more than once:

@@ -11,6 +11,7 @@ import { createDatabase, type Database } from '../db.js';
 import type { EmailTransport } from '../email/transport.js';
 import type { ReceiptExtractor } from '../receipts/extraction.js';
 import { todayInMalaysia } from '../routes/expenses.js';
+import { hashDownloadToken } from '../exports/tokens.js';
 
 const PASSWORD = 'correcthorsebattery';
 const UNKNOWN_ID = '00000000-0000-4000-8000-000000000000';
@@ -100,11 +101,12 @@ afterEach(async () => {
 type Account = { token: string; userId: string };
 
 async function account(email: string): Promise<Account> {
-  await app.inject({
+  const registration = await app.inject({
     method: 'POST',
     url: '/auth/register',
     payload: { email, password: PASSWORD },
   });
+  expect(registration.statusCode, registration.body).toBe(201);
 
   await database.pool.query('UPDATE users SET email_verified = true WHERE email = $1', [
     email,
@@ -2319,6 +2321,127 @@ describe('EXP-21: GET /expenses/export.zip', () => {
       expect(present.has(cell)).toBe(true);
     }
   });
+});
+
+describe('EXP-34: single-use export download tokens', () => {
+  async function mint(token: string): Promise<{ token: string; expiresAt: string }> {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/exports/token',
+      headers: auth(token),
+    });
+    expect(response.statusCode).toBe(201);
+    return response.json() as { token: string; expiresAt: string };
+  }
+
+  it('AC-1, AC-2, AC-7: stores only a hash and returns a one-minute token', async () => {
+    const { token, userId } = await account('download-mint@example.com');
+    const created = await mint(token);
+    expect(new Date(created.expiresAt).getTime() - Date.now()).toBeGreaterThan(55_000);
+
+    const { rows } = await database.pool.query<{ user_id: string; token_hash: string }>(
+      'SELECT user_id, token_hash FROM download_tokens',
+    );
+    expect(rows).toEqual([{ user_id: userId, token_hash: expect.any(String) }]);
+    expect(rows[0]!.token_hash).not.toBe(created.token);
+  });
+
+  it('AC-3 to AC-6: accepts a URL token once, strips it before strict validation, and preserves bad filters', async () => {
+    const { token } = await account('download-once@example.com');
+    await anExpense(token);
+    const created = await mint(token);
+
+    const first = await app.inject({
+      method: 'GET',
+      url: `/expenses/export.csv?token=${encodeURIComponent(created.token)}`,
+    });
+    expect(first.statusCode).toBe(200);
+
+    const replay = await app.inject({
+      method: 'GET',
+      url: `/expenses/export.csv?token=${encodeURIComponent(created.token)}`,
+    });
+    const unknown = await app.inject({ method: 'GET', url: '/expenses/export.csv?token=unknown' });
+    expect(replay.statusCode).toBe(401);
+    expect(unknown.statusCode).toBe(401);
+    expect(replay.body).toBe(unknown.body);
+
+    const valid = await mint(token);
+    const malformed = await app.inject({
+      method: 'GET',
+      url: `/expenses/export.csv?token=${encodeURIComponent(valid.token)}&catgeoryId=x`,
+    });
+    expect(malformed.statusCode).toBe(400);
+    expect(malformed.json()).toMatchObject({ fields: { catgeoryId: expect.any(String) } });
+
+    const bearerAndUrl = await mint(token);
+    const withBearer = await app.inject({
+      method: 'GET',
+      url: `/expenses/export.zip?token=${encodeURIComponent(bearerAndUrl.token)}`,
+      headers: auth(token),
+    });
+    expect(withBearer.statusCode).toBe(200);
+
+    // The URL token was not consumed by the bearer request, so it remains
+    // valid for the browser-style ZIP request.
+    const zip = await app.inject({
+      method: 'GET',
+      url: `/expenses/export.zip?token=${encodeURIComponent(bearerAndUrl.token)}`,
+    });
+    expect(zip.statusCode).toBe(200);
+  });
+
+  it('AC-5: concurrent redemption succeeds exactly once', async () => {
+    const { token } = await account('download-race@example.com');
+    const created = await mint(token);
+    const url = `/expenses/export.csv?token=${encodeURIComponent(created.token)}`;
+    const results = await Promise.all(Array.from({ length: 6 }, () => app.inject({ method: 'GET', url })));
+    expect(results.filter((result) => result.statusCode === 200)).toHaveLength(1);
+    expect(results.filter((result) => result.statusCode === 401)).toHaveLength(5);
+  });
+
+  it('AC-6: expired, unknown, and replayed tokens have one indistinguishable 401 body', async () => {
+    const { token } = await account('download-expired@example.com');
+    const expired = await mint(token);
+    await database.pool.query(
+      'UPDATE download_tokens SET expires_at = now() - interval \'1 second\' WHERE token_hash = $1',
+      [hashDownloadToken(expired.token)],
+    );
+
+    const used = await mint(token);
+    await app.inject({ method: 'GET', url: `/expenses/export.csv?token=${encodeURIComponent(used.token)}` });
+    const responses = await Promise.all([
+      app.inject({ method: 'GET', url: `/expenses/export.csv?token=${encodeURIComponent(expired.token)}` }),
+      app.inject({ method: 'GET', url: `/expenses/export.csv?token=${encodeURIComponent(used.token)}` }),
+      app.inject({ method: 'GET', url: '/expenses/export.csv?token=not-a-token' }),
+    ]);
+    expect(responses.map((response) => response.statusCode)).toEqual([401, 401, 401]);
+    expect(new Set(responses.map((response) => response.body)).size).toBe(1);
+  });
+
+  it('AC-8 and NG-2: a token belongs to its owner and cannot authenticate another route', async () => {
+    const owner = await account('download-owner@example.com');
+    const other = await account('download-other@example.com');
+    const ownersExpense = await anExpense(owner.token, { merchantName: 'Owners row' });
+    const othersExpense = await anExpense(other.token, { merchantName: 'Other row' });
+    const created = await mint(owner.token);
+
+    const exportForOwner = await app.inject({
+      method: 'GET',
+      url: `/expenses/export.csv?token=${encodeURIComponent(created.token)}`,
+    });
+    expect(exportForOwner.statusCode).toBe(200);
+    expect(exportForOwner.body).toContain(ownersExpense.id);
+    expect(exportForOwner.body).not.toContain(othersExpense.id);
+
+    const second = await mint(owner.token);
+    const ordinaryRoute = await app.inject({
+      method: 'GET',
+      url: `/expenses?token=${encodeURIComponent(second.token)}`,
+    });
+    expect(ordinaryRoute.statusCode).toBe(401);
+  });
+
 });
 
 describe('todayInMalaysia', () => {

@@ -220,7 +220,7 @@ table grows steadily with rows that can no longer authenticate.
 
 ```bash
 cd apps/api
-npm run prune:sessions
+npm run prune:auth-artifacts
 ```
 
 It deletes:
@@ -236,7 +236,7 @@ rows are the only record of what happened.
 scheduled job — run it by hand, or add it to your own crontab:
 
 ```cron
-0 4 * * * cd /path/to/expenses-recorder/apps/api && npm run prune:sessions
+0 4 * * * cd /path/to/expenses-recorder/apps/api && npm run prune:auth-artifacts
 ```
 
 Passwords must be at least 12 characters, with no composition rules, and are

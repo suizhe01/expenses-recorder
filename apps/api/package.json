@@ -15,7 +15,7 @@
     "test": "vitest run",
     "migrate": "node-pg-migrate up",
     "migrate:down": "node-pg-migrate down",
-    "prune:sessions": "tsx src/scripts/prune-sessions.ts",
+    "prune:auth-artifacts": "tsx src/scripts/prune-auth-artifacts.ts",
     "openapi": "tsx src/scripts/write-openapi.ts"
   },
   "dependencies": {

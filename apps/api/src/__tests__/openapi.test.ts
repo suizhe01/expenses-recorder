@@ -72,6 +72,7 @@ describe('the OpenAPI document', () => {
       '/expenses/{id}',
       '/expenses/export.csv',
       '/expenses/export.zip',
+      '/exports/token',
     ]) {
       expect(paths).toContain(expected);
     }
@@ -297,7 +298,7 @@ describe('EXP-22: documented requests', () => {
       // Nothing registered is missing from the map...
       expect(needing).toEqual(documented);
       // ...which, being an equality, also proves no entry names a dead route.
-      expect(needing.length).toBe(15);
+      expect(needing.length).toBe(16);
     } finally {
       await probe.close();
     }
@@ -387,7 +388,14 @@ describe('EXP-22: documented requests', () => {
       );
       const names = query.map((parameter) => parameter.name).sort();
 
-      expect(names, path).toEqual(['categoryId', 'from', 'hasReceipt', 'to']);
+      expect(
+        names,
+        path,
+      ).toEqual(
+        path.startsWith('/expenses/export.')
+          ? ['categoryId', 'from', 'hasReceipt', 'to', 'token']
+          : ['categoryId', 'from', 'hasReceipt', 'to'],
+      );
 
       // Repeatable, which is what makes the UI offer more than one value.
       const categoryId = query.find((parameter) => parameter.name === 'categoryId');

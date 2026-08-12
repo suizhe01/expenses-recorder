@@ -8,6 +8,7 @@ import type { Database } from '../db.js';
 import { BOM, centsCell, csvRow, plainCell, textCell, timestampCell } from '../csv.js';
 import { entryName, uniqueEntryName } from '../zip.js';
 import { authenticatedUserId, requireAuth } from '../auth/guard.js';
+import { redeemDownloadToken } from '../exports/tokens.js';
 import {
   findLiveCategoryById,
   findLiveCategoryIds,
@@ -385,8 +386,32 @@ export function registerExpenseRoutes(
   app: FastifyInstance,
   { config, database }: ExpenseRouteOptions,
 ): void {
-  // AC-20: the same guard the category and receipt routes use, unchanged.
-  app.addHook('preHandler', requireAuth);
+  const exportAuth = async (request: Parameters<typeof requireAuth>[0], reply: Parameters<typeof requireAuth>[1]) => {
+    const query = request.query as Record<string, unknown>;
+    const token = query.token;
+    // The filter schema is strict. Remove this auth-only key before its parse,
+    // while preserving every real unknown filter for the 400 response.
+    delete query.token;
+
+    // A bearer credential keeps the existing API behaviour. Browser download
+    // links have no way to set this header, so only that path consumes a URL
+    // token. Do not fall back after a malformed bearer header.
+    if (request.headers.authorization !== undefined) {
+      return requireAuth(request, reply);
+    }
+
+    if (typeof token !== 'string' || token.length === 0) {
+      return reply.code(401).send({ error: 'Unauthorized' });
+    }
+
+    const userId = await redeemDownloadToken(database.pool, token);
+
+    if (!userId) {
+      return reply.code(401).send({ error: 'Unauthorized' });
+    }
+
+    request.authenticatedUserId = userId;
+  };
 
   /**
    * AC-9. Checks only the references the request actually mentions.
@@ -523,6 +548,7 @@ export function registerExpenseRoutes(
   }
 
   app.get('/expenses', {
+    preHandler: requireAuth,
     schema: {
       tags: ['Expenses'],
       summary: 'List live expenses, newest purchase first',
@@ -589,6 +615,7 @@ export function registerExpenseRoutes(
    * test pins that rather than trusting it.
    */
   app.get('/expenses/export.csv', {
+    preHandler: exportAuth,
     schema: {
       tags: ['Expenses'],
       summary: 'Export the filtered expenses as a CSV download',
@@ -678,6 +705,7 @@ export function registerExpenseRoutes(
   });
 
   app.post('/expenses', {
+    preHandler: requireAuth,
     schema: {
       tags: ['Expenses'],
       summary: 'Record an expense',
@@ -729,6 +757,7 @@ export function registerExpenseRoutes(
    * receipt images backing them.
    */
   app.get('/expenses/export.zip', {
+    preHandler: exportAuth,
     schema: {
       tags: ['Expenses'],
       summary: 'Export the filtered expenses and their receipt images as a ZIP',
@@ -952,6 +981,7 @@ export function registerExpenseRoutes(
   });
 
   app.get('/expenses/:id', {
+    preHandler: requireAuth,
     schema: {
       tags: ['Expenses'],
       summary: 'Fetch one expense',
@@ -988,6 +1018,7 @@ export function registerExpenseRoutes(
   });
 
   app.patch('/expenses/:id', {
+    preHandler: requireAuth,
     schema: {
       tags: ['Expenses'],
       summary: 'Edit an expense',
@@ -1060,6 +1091,7 @@ export function registerExpenseRoutes(
   });
 
   app.delete('/expenses/:id', {
+    preHandler: requireAuth,
     schema: {
       tags: ['Expenses'],
       summary: 'Soft delete an expense',
