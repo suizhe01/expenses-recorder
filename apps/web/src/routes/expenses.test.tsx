@@ -8,6 +8,7 @@ import { ExpensesScreen, groupExpenses, monthLabel } from '@/routes/expenses';
 import { SessionProvider } from '@/session/context';
 import { createSessionManager } from '@/session/session';
 import { fakeStorage, session } from '@/test/support';
+import { CLIENT_ROUTES } from '@/client-routes';
 
 const expenses: Expense[] = [
   { id: 'one', category: { id: 'cat-1', name: 'Food' }, receiptId: null, totalCents: 1200, purchasedOn: '2026-08-01', currency: 'MYR', merchantName: 'Kopitiam', receiptNumber: 'R-1', note: 'Breakfast' },
@@ -15,7 +16,7 @@ const expenses: Expense[] = [
   { id: 'three', category: { id: 'cat-2', name: 'Travel' }, receiptId: null, totalCents: 3000, purchasedOn: '2026-07-31', currency: 'MYR', merchantName: null, receiptNumber: null, note: 'Train' },
 ];
 
-async function mount(rows: Expense[] = expenses, initialPath = '/expenses', deletedCategory = false) {
+async function mount(rows: Expense[] = expenses, initialPath: string = CLIENT_ROUTES.expenses, deletedCategory = false) {
   const calls: string[] = [];
   const api = { create: vi.fn(), list: vi.fn(async (_token: string, filters) => { calls.push(expenseQuery(filters)); return deletedCategory && filters.categoryId?.length ? { kind: 'error' as const, status: 422, message: 'Category not found' } : { kind: 'ok' as const, status: 200, body: rows }; }) };
   const categoriesApi = { list: vi.fn(async () => ({ kind: 'ok' as const, status: 200, body: [{ id: 'cat-1', name: 'Food', createdAt: '', updatedAt: '' }] })) };
@@ -74,7 +75,7 @@ describe('expense list', () => {
   });
 
   it('keeps the deleted-category message visible while clearing only its URL filter', async () => {
-    const { calls } = await mount(expenses, '/expenses?from=2026-08-01&hasReceipt=false&categoryId=cat-deleted', true);
+    const { calls } = await mount(expenses, `${CLIENT_ROUTES.expenses}?from=2026-08-01&hasReceipt=false&categoryId=cat-deleted`, true);
     expect(await screen.findByText('That category was deleted')).toBeInTheDocument();
     await waitFor(() => expect(calls).toEqual(['?from=2026-08-01&categoryId=cat-deleted&hasReceipt=false', '?from=2026-08-01&hasReceipt=false']));
     expect(screen.getByText('That category was deleted')).toBeInTheDocument();

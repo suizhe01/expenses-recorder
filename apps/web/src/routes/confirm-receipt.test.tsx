@@ -7,6 +7,7 @@ import { ConfirmReceiptScreen } from '@/routes/confirm-receipt';
 import { SessionProvider } from '@/session/context';
 import { createSessionManager } from '@/session/session';
 import { fakeStorage, session } from '@/test/support';
+import { CLIENT_ROUTES, confirmReceiptPath } from '@/client-routes';
 
 const receipt = { id: 'receipt-1', contentType: 'image/jpeg', byteSize: 4, originalFilename: 'DAY ONE', createdAt: '2026-08-12T00:00:00Z', expenseId: null, extraction: { status: 'failed', isReceipt: false, merchantName: null, purchasedOn: null, totalCents: null, currency: null } };
 const category = { id: '00000000-0000-0000-0000-000000000002', name: 'Food', createdAt: '2026-08-12T00:00:00Z', updatedAt: '2026-08-12T00:00:00Z' };
@@ -24,7 +25,7 @@ async function mount(fileStatus = 503, expense: { status: number; body: unknown 
   }));
   const manager = createSessionManager({ auth: createAuthApi(createClient('', async () => new Response(JSON.stringify(session()), { status: 200 }))), storage: fakeStorage() });
   await manager.signIn('someone@example.com', 'password');
-  const view = render(<SessionProvider manager={manager}><MemoryRouter initialEntries={['/receipts/receipt-1/confirm']}><Routes><Route path="/receipts/:id/confirm" element={<ConfirmReceiptScreen />} /><Route path="/" element={<p>Inbox</p>} /></Routes></MemoryRouter></SessionProvider>);
+  const view = render(<SessionProvider manager={manager}><MemoryRouter initialEntries={[confirmReceiptPath('receipt-1')]}><Routes><Route path={CLIENT_ROUTES.confirmReceipt} element={<ConfirmReceiptScreen />} /><Route path={CLIENT_ROUTES.home} element={<p>Inbox</p>} /></Routes></MemoryRouter></SessionProvider>);
   await screen.findByRole('heading', { name: 'Confirm receipt' });
   return { calls, view };
 }

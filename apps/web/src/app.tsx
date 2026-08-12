@@ -6,6 +6,7 @@ import { CheckEmailScreen } from '@/routes/check-email';
 import { HomeScreen } from '@/routes/home';
 import { ConfirmReceiptScreen } from '@/routes/confirm-receipt';
 import { ExpensesScreen } from '@/routes/expenses';
+import { CLIENT_ROUTES } from '@/client-routes';
 
 /**
  * The route table plus the signed-in/signed-out split.
@@ -36,24 +37,24 @@ export function Routing() {
   return (
     <Routes>
       <Route
-        path="/sign-in"
-        element={signedIn ? <Navigate to="/" replace /> : <SignInScreen />}
+        path={CLIENT_ROUTES.signIn}
+        element={signedIn ? <Navigate to={CLIENT_ROUTES.home} replace /> : <SignInScreen />}
       />
-      <Route path="/expenses" element={signedIn ? <ExpensesScreen /> : <Navigate to="/sign-in" replace />} />
+      <Route path={CLIENT_ROUTES.expenses} element={signedIn ? <ExpensesScreen /> : <Navigate to={CLIENT_ROUTES.signIn} replace />} />
       <Route
-        path="/sign-up"
-        element={signedIn ? <Navigate to="/" replace /> : <SignUpScreen />}
-      />
-      <Route
-        path="/check-email"
-        element={signedIn ? <Navigate to="/" replace /> : <CheckEmailScreen />}
+        path={CLIENT_ROUTES.signUp}
+        element={signedIn ? <Navigate to={CLIENT_ROUTES.home} replace /> : <SignUpScreen />}
       />
       <Route
-        path="/"
-        element={signedIn ? <HomeScreen /> : <Navigate to="/sign-in" replace />}
+        path={CLIENT_ROUTES.checkEmail}
+        element={signedIn ? <Navigate to={CLIENT_ROUTES.home} replace /> : <CheckEmailScreen />}
       />
-      <Route path="/receipts/:id/confirm" element={signedIn ? <ConfirmReceiptScreen /> : <Navigate to="/sign-in" replace />} />
-      <Route path="*" element={<Navigate to={signedIn ? '/' : '/sign-in'} replace />} />
+      <Route
+        path={CLIENT_ROUTES.home}
+        element={signedIn ? <HomeScreen /> : <Navigate to={CLIENT_ROUTES.signIn} replace />}
+      />
+      <Route path={CLIENT_ROUTES.confirmReceipt} element={signedIn ? <ConfirmReceiptScreen /> : <Navigate to={CLIENT_ROUTES.signIn} replace />} />
+      <Route path={CLIENT_ROUTES.catchAll} element={<Navigate to={signedIn ? CLIENT_ROUTES.home : CLIENT_ROUTES.signIn} replace />} />
     </Routes>
   );
 }

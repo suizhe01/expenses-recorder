@@ -136,6 +136,17 @@ image needs no build toolchain.
   stripped from the response. Adding a field to a payload means adding it to
   the schema too, or it silently vanishes — this has already cost one debugging
   session. It is also what guarantees cost and tokens cannot leak
+- **A client route may never start with an API prefix.** `API_PREFIXES` in
+  `apps/api/src/web.ts` is `/auth`, `/categories`, `/receipts`, `/expenses`,
+  `/health`, `/docs`, and a prefix owns both itself and everything beneath it.
+  In production the SPA fallback deliberately refuses `index.html` for those
+  paths so an unknown API path stays a JSON 404; in development `vite.config.ts`
+  proxies the same list to Fastify. So a colliding client route works perfectly
+  when clicked and answers **JSON on a direct load, a reload or a shared link** —
+  silent until someone opens the URL. This shipped twice (`/receipts/:id/confirm`
+  and `/expenses`). Every client route is declared in
+  `apps/web/src/client-routes.ts`, and `client-routes.test.ts` reads the prefix
+  list out of the API source and fails on any collision
 - **Never declare `body`, `querystring`, or `params` schemas.** Any of them
   switches on Fastify request validation, which answers 400 before the handler
   runs and would undo login's uniform 401, resend-verification's fixed 202,

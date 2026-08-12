@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { LoaderCircle, ReceiptText, Trash2, Upload } from 'lucide-react';
+import { Link } from 'react-router';
+import { confirmReceiptPath } from '@/client-routes';
 import { createClient } from '@/api/client';
 import { createReceiptsApi, type Receipt, type ReceiptsApi } from '@/api/receipts';
 import { describeFailure } from '@/api/messages';
@@ -174,7 +176,7 @@ export function HomeScreen({ receiptsApi }: { receiptsApi?: ReceiptsApi } = {}) 
 function ReceiptRow({ receipt, fresh, onDelete }: { receipt: Receipt; fresh: boolean; onDelete: () => void }) {
   const read = receipt.extraction && receipt.extraction.status !== 'failed' && receipt.extraction.status !== 'skipped';
   return <article className={cn('grid min-h-20 grid-cols-[minmax(0,1fr)_auto] items-center gap-3 rounded-xl border bg-card p-3 dark:border-border dark:bg-card', fresh && 'animate-[saved_600ms_ease-out] motion-reduce:animate-none')}>
-    <a className="min-h-11 min-w-0 text-left" href={`/receipts/${receipt.id}/confirm`}><div className="flex min-w-0 items-center gap-2"><p className={cn('truncate font-medium', !read && 'text-muted-foreground')}>{read ? receipt.extraction!.merchantName ?? receipt.originalFilename ?? 'Receipt' : receipt.originalFilename ?? 'Receipt'}</p>{!read && <span className="shrink-0 rounded-md bg-muted px-2 py-0.5 text-xs text-muted-foreground dark:bg-muted/70">Needs details</span>}</div><p className="mt-1 truncate text-xs text-muted-foreground">{read && receipt.extraction!.purchasedOn ? formatPurchasedOn(receipt.extraction!.purchasedOn) + ' · ' : !read ? "Couldn't be read · " : ''}{formatCreatedAt(receipt.createdAt)}</p></a>
+    <Link className="min-h-11 min-w-0 text-left" to={confirmReceiptPath(receipt.id)}><div className="flex min-w-0 items-center gap-2"><p className={cn('truncate font-medium', !read && 'text-muted-foreground')}>{read ? receipt.extraction!.merchantName ?? receipt.originalFilename ?? 'Receipt' : receipt.originalFilename ?? 'Receipt'}</p>{!read && <span className="shrink-0 rounded-md bg-muted px-2 py-0.5 text-xs text-muted-foreground dark:bg-muted/70">Needs details</span>}</div><p className="mt-1 truncate text-xs text-muted-foreground">{read && receipt.extraction!.purchasedOn ? formatPurchasedOn(receipt.extraction!.purchasedOn) + ' · ' : !read ? "Couldn't be read · " : ''}{formatCreatedAt(receipt.createdAt)}</p></Link>
     <div className="flex items-center gap-2">{read && receipt.extraction!.totalCents !== null && <p className="min-w-24 text-right font-medium tabular-nums">{formatMoney(receipt.extraction!.totalCents, receipt.extraction!.currency)}</p>}<Button variant="ghost" size="icon" className="size-11" aria-label={`Delete ${receipt.originalFilename ?? 'receipt'}`} onClick={onDelete}><Trash2 aria-hidden="true" /></Button></div>
   </article>;
 }

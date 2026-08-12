@@ -1,7 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { API_PREFIXES, isApiPath, registerWebApp } from '../web.js';
 
@@ -18,6 +19,46 @@ import { API_PREFIXES, isApiPath, registerWebApp } from '../web.js';
  */
 
 const MARKER = '<!doctype html><title>web app</title>';
+
+/**
+ * EXP-37. The web app's route table, read as text out of
+ * apps/web/src/client-routes.ts.
+ *
+ * Read rather than imported: apps/web is a separate TypeScript project with
+ * DOM-only settings, so importing it here would pull its whole type graph into
+ * this workspace's typecheck. Reading it still means a route moved back under
+ * an API prefix fails these tests, which is the point — the previous version of
+ * this bug shipped because nothing connected the client's paths to the server's
+ * fallback.
+ */
+const CLIENT_ROUTES_TS = fileURLToPath(
+  new URL('../../../web/src/client-routes.ts', import.meta.url),
+);
+
+function clientRouteEntries(): Map<string, string> {
+  const source = readFileSync(CLIENT_ROUTES_TS, 'utf8');
+  const declaration = /export const CLIENT_ROUTES = \{([^}]*)\}/.exec(source);
+  if (!declaration) {
+    throw new Error(`could not find CLIENT_ROUTES in ${CLIENT_ROUTES_TS}`);
+  }
+
+  return new Map(
+    [...declaration[1]!.matchAll(/(\w+):\s*'([^']+)'/g)].map(
+      (match) => [match[1]!, match[2]!] as const,
+    ),
+  );
+}
+
+/** Every routable path. The catch-all is not a URL anyone loads. */
+function clientRoutes(): string[] {
+  return [...clientRouteEntries().values()].filter((route) => route !== '*');
+}
+
+function clientRoute(name: string): string {
+  const route = clientRouteEntries().get(name);
+  if (!route) throw new Error(`no client route named ${name}`);
+  return route;
+}
 
 let root: string;
 
@@ -102,6 +143,41 @@ describe('serving the web app (AC-7)', () => {
   it('falls back to index.html for an unknown app route', async () => {
     // A deep link into the SPA. Without this, refreshing on /sign-in 404s.
     const response = await app.inject({ method: 'GET', url: '/sign-in' });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toContain('web app');
+  });
+
+  /**
+   * EXP-37 AC-3 and AC-8. The client routes that a user actually types,
+   * reloads or pastes.
+   *
+   * This is the assertion the original bug slipped past: the web suite renders
+   * with no server, so clicking through to a colliding route works while a
+   * direct load answers JSON. Here the request reaches the real fallback, with
+   * `/expenses` registered above as a genuine API neighbour — move the confirm
+   * screen back under `/receipts/` or the list back to `/expenses` and these
+   * stop returning the app.
+   */
+  it('serves the app for a direct load of every declared client route', async () => {
+    const routes = clientRoutes();
+
+    // A parse that quietly returned nothing would make this vacuously true.
+    expect(routes.length).toBeGreaterThanOrEqual(5);
+
+    for (const route of routes) {
+      const url = route.replaceAll(/:[A-Za-z]+/g, '00000000-0000-0000-0000-000000000000');
+      const response = await app.inject({ method: 'GET', url });
+
+      expect(response.statusCode, url).toBe(200);
+      expect(response.body, url).toContain('web app');
+    }
+  });
+
+  it('serves the app for a filtered list URL, so a reload and a shared link work', async () => {
+    // EXP-30 AC-9 promised this and `/expenses` silently broke it.
+    const url = `${clientRoute('expenses')}?from=2026-08-01&categoryId=cat-1&hasReceipt=true`;
+    const response = await app.inject({ method: 'GET', url });
 
     expect(response.statusCode).toBe(200);
     expect(response.body).toContain('web app');

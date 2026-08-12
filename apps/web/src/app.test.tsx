@@ -6,6 +6,7 @@ import { Routing } from '@/app';
 import { SessionProvider } from '@/session/context';
 import { createSessionManager, SESSION_ENDED } from '@/session/session';
 import { fakeStorage, fakeTransport, session } from '@/test/support';
+import { CLIENT_ROUTES, confirmReceiptPath } from '@/client-routes';
 
 beforeEach(() => {
   vi.stubGlobal('fetch', vi.fn(async () => new Response('[]', {
@@ -61,6 +62,45 @@ describe('route guards (AC-6)', () => {
 
     expect(await screen.findByRole('heading', { name: 'Receipts' })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Create account' })).not.toBeInTheDocument();
+  });
+});
+
+describe('direct loads of the moved routes (EXP-37 AC-3, AC-8)', () => {
+  it('renders the confirm screen from its own URL', async () => {
+    const receipt = {
+      id: 'receipt-1', contentType: 'image/jpeg', byteSize: 4, originalFilename: 'lunch.jpg',
+      createdAt: '2026-08-12T00:00:00.000Z', expenseId: null, extraction: null,
+    };
+    vi.mocked(fetch).mockImplementation(async (input) => {
+      const path = new URL(String(input), 'http://test.local').pathname;
+      if (path === '/receipts') return new Response(JSON.stringify([receipt]), { status: 200 });
+      return new Response('[]', { status: 200, headers: { 'content-type': 'application/json' } });
+    });
+    const active = session();
+    mount(
+      confirmReceiptPath('receipt-1'),
+      {
+        '/auth/refresh': { status: 200, body: active },
+        '/auth/me': { status: 200, body: active.user },
+      },
+      'stored-refresh',
+    );
+
+    expect(await screen.findByRole('heading', { name: 'Confirm receipt' })).toBeInTheDocument();
+  });
+
+  it('renders the expense list from a filtered URL', async () => {
+    const active = session();
+    mount(
+      `${CLIENT_ROUTES.expenses}?from=2026-08-01&hasReceipt=true`,
+      {
+        '/auth/refresh': { status: 200, body: active },
+        '/auth/me': { status: 200, body: active.user },
+      },
+      'stored-refresh',
+    );
+
+    expect(await screen.findByRole('heading', { name: 'Expenses' })).toBeInTheDocument();
   });
 });
 
