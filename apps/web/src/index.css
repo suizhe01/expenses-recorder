@@ -80,6 +80,17 @@
   --chart-3: oklch(0.439 0 0);
   --chart-4: oklch(0.371 0 0);
   --chart-5: oklch(0.269 0 0);
+  /*
+   * Categorical chart palette. Each hue clears 3:1 contrast, 0.08 chroma,
+   * 15 normal-vision ΔE, and 6 CVD ΔE thresholds; see palette-validation.ts.
+   */
+  --cat-1: oklch(0.5 0.18 90);
+  --cat-2: oklch(0.5 0.12 255);
+  --cat-3: oklch(0.5 0.2 60);
+  --cat-4: oklch(0.5 0.15 285);
+  --cat-5: oklch(0.5 0.15 30);
+  --cat-6: oklch(0.5 0.12 225);
+  --cat-other: oklch(0.5 0 0);
   --sidebar: oklch(0.985 0 0);
   --sidebar-foreground: oklch(0.145 0 0);
   --sidebar-primary: oklch(0.205 0 0);
@@ -143,6 +154,14 @@
   --chart-3: oklch(0.439 0 0);
   --chart-4: oklch(0.371 0 0);
   --chart-5: oklch(0.269 0 0);
+  /* See palette-validation.ts for the thresholds that protect these hues. */
+  --cat-1: oklch(0.72 0.18 90);
+  --cat-2: oklch(0.72 0.12 255);
+  --cat-3: oklch(0.72 0.2 60);
+  --cat-4: oklch(0.72 0.15 285);
+  --cat-5: oklch(0.72 0.15 30);
+  --cat-6: oklch(0.72 0.12 225);
+  --cat-other: oklch(0.72 0 0);
   --sidebar: oklch(0.205 0 0);
   --sidebar-foreground: oklch(0.985 0 0);
   --sidebar-primary: oklch(0.488 0.243 264.376);
