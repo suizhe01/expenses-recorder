@@ -45,6 +45,8 @@ export function ExpenseDetailScreen({ expensesApi, categoriesApi, receiptsApi }:
   const [saving, setSaving] = useState(false);
   const savingRef = useRef(false);
   const [confirming, setConfirming] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const deletingRef = useRef(false);
   const [deleteError, setDeleteError] = useState<string>();
   const [notice, setNotice] = useState<string>();
   const [fatal, setFatal] = useState<string>();
@@ -128,9 +130,18 @@ export function ExpenseDetailScreen({ expensesApi, categoriesApi, receiptsApi }:
   }
 
   async function remove() {
+    // The same guard `save` carries, and for a sharper reason: the dialog stays
+    // open for the whole round-trip, so a second tap sends a second DELETE. The
+    // row is already gone by then, so it answers 404 — and reporting that would
+    // tell someone their expense was not found immediately after deleting it.
+    if (deletingRef.current) return;
+    deletingRef.current = true;
+    setDeleting(true);
     setDeleteError(undefined);
     const result = await session.authorized((token) => api.remove(token, id));
     if (result.kind === 'ok') { leave('Expense deleted.'); return; }
+    deletingRef.current = false;
+    setDeleting(false);
     if (result.kind === 'error' && result.status === 404) { leave(NOT_FOUND); return; }
     if (!(result.kind === 'error' && result.status === 401)) setDeleteError(describeFailure(result));
   }
@@ -165,7 +176,7 @@ export function ExpenseDetailScreen({ expensesApi, categoriesApi, receiptsApi }:
 
     {preview && image && <div className="fixed inset-0 z-50 flex bg-black/90 p-4" role="dialog" aria-modal="true"><button className="absolute right-4 top-4 min-h-11 rounded-lg bg-white px-4 text-black" onClick={() => setPreview(false)}>Close</button><img className="m-auto max-h-full max-w-full object-contain" src={image} alt="Receipt full screen" /></div>}
 
-    <Dialog open={confirming} onOpenChange={(open) => { if (!open) { setConfirming(false); setDeleteError(undefined); } }}>
+    <Dialog open={confirming} onOpenChange={(open) => { if (!open && !deleting) { setConfirming(false); setDeleteError(undefined); } }}>
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Delete expense?</DialogTitle>
@@ -175,7 +186,7 @@ export function ExpenseDetailScreen({ expensesApi, categoriesApi, receiptsApi }:
           <DialogDescription>This expense leaves your archive.{expense.receiptId ? ' The receipt goes back to your inbox.' : ''}</DialogDescription>
         </DialogHeader>
         {deleteError && <Alert variant="destructive" role="alert"><AlertDescription>{deleteError}</AlertDescription></Alert>}
-        <DialogFooter><DialogClose asChild><Button variant="outline">Cancel</Button></DialogClose><Button variant="destructive" onClick={() => void remove()}>Delete</Button></DialogFooter>
+        <DialogFooter><DialogClose asChild><Button variant="outline" disabled={deleting}>Cancel</Button></DialogClose><Button variant="destructive" disabled={deleting} onClick={() => void remove()}>{deleting ? 'Deleting…' : 'Delete'}</Button></DialogFooter>
       </DialogContent>
     </Dialog>
   </main>;
