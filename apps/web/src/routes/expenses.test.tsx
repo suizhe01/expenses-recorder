@@ -66,4 +66,10 @@ describe('expense list', () => {
     await mount([]);
     expect(await screen.findByText('Nothing filed yet')).toBeInTheDocument();
   });
+
+  it('reserves the safe-area-aware tab bar height below the final row', async () => {
+    await mount();
+    await screen.findByText('Kopitiam');
+    expect(screen.getByRole('main')).toHaveClass('pb-[calc(5.5rem+env(safe-area-inset-bottom))]');
+  });
 });
