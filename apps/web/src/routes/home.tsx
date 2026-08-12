@@ -154,7 +154,7 @@ export function HomeScreen({ receiptsApi }: { receiptsApi?: ReceiptsApi } = {}) 
         ) : <div className="grid gap-2">{receipts.map((receipt) => <ReceiptRow key={receipt.id} receipt={receipt} fresh={receipt.id === newId} onDelete={() => setDeleting(receipt)} />)}</div>}
       </section>
 
-      <section className="fixed inset-x-0 bottom-16 z-20 px-4 pb-3">
+      <section className="fixed inset-x-0 bottom-[calc(4rem+env(safe-area-inset-bottom))] z-20 px-4 pb-3">
         <div className="mx-auto grid h-32 w-full max-w-xl grid-cols-[5rem_1fr] items-center gap-3 rounded-xl border bg-card p-3 shadow-sm dark:border-border">
           {preview ? <img src={preview} alt="Selected receipt preview" className="h-24 w-20 rounded-lg object-cover" /> : <div className="flex h-24 w-20 items-center justify-center rounded-lg bg-muted dark:bg-muted/70"><Upload aria-hidden="true" /></div>}
           <div aria-live="polite" className="min-w-0">

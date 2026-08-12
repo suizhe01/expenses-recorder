@@ -53,6 +53,7 @@ describe('expense list', () => {
     const { calls } = await mount();
     await screen.findByText('Kopitiam');
     await userEvent.click(screen.getByRole('button', { name: /filters/i }));
+    expect(screen.getByRole('dialog')).toHaveClass('bottom-0', 'rounded-t-2xl');
     await userEvent.clear(screen.getByLabelText('From'));
     await userEvent.type(screen.getByLabelText('From'), '2026-08-01');
     await userEvent.click(screen.getByRole('button', { name: 'Apply filters' }));
