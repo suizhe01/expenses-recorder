@@ -12,3 +12,9 @@ openapi.json
 # and every receipt image; this repository is public.
 backups/
 *.tsbuildinfo
+# Locally installed Claude tooling — third-party skills and agents whose terms
+# are not established, so they are not published from this public repository.
+# The finn-* skills predate this and stay tracked: ignoring a path does not
+# untrack what is already committed. Anything new under .claude/ that SHOULD be
+# shared needs `git add -f`.
+.claude/
