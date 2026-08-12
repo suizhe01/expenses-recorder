@@ -47,6 +47,7 @@ const fakeFields = {
   totalCents: 1058,
   currency: 'MYR',
   paymentMethod: 'CASH',
+  items: [],
 };
 
 function fakeExtractor(

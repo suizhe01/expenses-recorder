@@ -144,6 +144,26 @@ const roundingCentsSchema = z
   .int({ message: 'must be a whole number of cents' })
   .nullable();
 
+const itemSchema = z.object({
+  description: textSchema(500).optional(),
+  quantity: textSchema(50).optional(),
+  unitPriceCents: componentCentsSchema.optional(),
+  lineTotalCents: componentCentsSchema.optional(),
+}).transform((item) => ({
+  description: item.description ?? null,
+  quantity: item.quantity ?? null,
+  unitPriceCents: item.unitPriceCents ?? null,
+  lineTotalCents: item.lineTotalCents ?? null,
+}));
+
+const itemsSchema = z.array(itemSchema).max(200, { message: 'must contain at most 200 items' })
+  .transform((items) => items.filter((item) =>
+    item.description !== null && item.description !== undefined
+    || item.quantity !== null && item.quantity !== undefined
+    || item.unitPriceCents !== null && item.unitPriceCents !== undefined
+    || item.lineTotalCents !== null && item.lineTotalCents !== undefined,
+  ));
+
 /**
  * AC-4 to AC-8. The three required fields, then everything a Malaysian tax
  * invoice prints.
@@ -166,6 +186,7 @@ const createSchema = z.object({
   receiptNumber: textSchema(255).optional(),
   paymentMethod: textSchema(255).optional(),
   note: textSchema(1000).optional(),
+  items: itemsSchema.optional(),
 });
 
 /**
@@ -358,6 +379,18 @@ const expenseResponse = {
     receiptNumber: { type: ['string', 'null'] },
     paymentMethod: { type: ['string', 'null'] },
     note: { type: ['string', 'null'] },
+    items: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          description: { type: ['string', 'null'] },
+          quantity: { type: ['string', 'null'] },
+          unitPriceCents: { type: ['integer', 'null'] },
+          lineTotalCents: { type: ['integer', 'null'] },
+        },
+      },
+    },
     createdAt: { type: 'string', format: 'date-time' },
     updatedAt: { type: 'string', format: 'date-time' },
   },

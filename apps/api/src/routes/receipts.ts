@@ -100,6 +100,18 @@ const extractionResponse = {
     totalCents: { type: ['integer', 'null'] },
     currency: { type: ['string', 'null'] },
     paymentMethod: { type: ['string', 'null'] },
+    items: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          description: { type: ['string', 'null'] },
+          quantity: { type: ['string', 'null'] },
+          unitPriceCents: { type: ['integer', 'null'] },
+          lineTotalCents: { type: ['integer', 'null'] },
+        },
+      },
+    },
     extractedAt: { type: 'string' },
   },
 } as const;
