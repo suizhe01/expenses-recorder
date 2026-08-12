@@ -73,10 +73,10 @@ describe('expense list', () => {
     expect(screen.getByRole('main')).toHaveClass('pb-[calc(5.5rem+env(safe-area-inset-bottom))]');
   });
 
-  it('keeps the deleted-category message visible while clearing the invalid URL filter', async () => {
-    const { calls } = await mount(expenses, '/expenses?categoryId=cat-deleted', true);
+  it('keeps the deleted-category message visible while clearing only its URL filter', async () => {
+    const { calls } = await mount(expenses, '/expenses?from=2026-08-01&hasReceipt=false&categoryId=cat-deleted', true);
     expect(await screen.findByText('That category was deleted')).toBeInTheDocument();
-    await waitFor(() => expect(calls).toEqual(['?categoryId=cat-deleted', '']));
+    await waitFor(() => expect(calls).toEqual(['?from=2026-08-01&categoryId=cat-deleted&hasReceipt=false', '?from=2026-08-01&hasReceipt=false']));
     expect(screen.getByText('That category was deleted')).toBeInTheDocument();
   });
 });

@@ -61,7 +61,16 @@ export function ExpensesScreen({ expensesApi, categoriesApi }: { expensesApi?: E
     void session.authorized((token) => api.list(token, filters)).then((result) => {
       if (cancelled) return;
       if (result.kind === 'ok') setExpenses(result.body);
-      else if (result.kind === 'error' && result.status === 422 && filters.categoryId?.length) { setDeletedCategoryNotice(true); setSearchParams({}, { replace: true }); }
+      else if (result.kind === 'error' && result.status === 422 && filters.categoryId?.length) {
+        setDeletedCategoryNotice(true);
+        setSearchParams((current) => {
+          const next = new URLSearchParams(current);
+          // The API does not identify which repeated category id was deleted,
+          // so remove the category filter while retaining every other filter.
+          next.delete('categoryId');
+          return next;
+        }, { replace: true });
+      }
       else if (!(result.kind === 'error' && result.status === 401)) setError(describeFailure(result));
       setLoading(false);
     });
