@@ -110,15 +110,17 @@ jobs:
       - name: Typecheck (web)
         run: npm run typecheck --workspace apps/web
 
-      - name: Test (web)
+      # Client-side parsing of a date-only UTC midnight slips a day west of UTC.
+      - name: Test web in Asia/Kuala_Lumpur (default positive-offset guard)
         run: npm run test --workspace apps/web
 
-      # Keep this inside the existing required `ci` job: a matrix would rename
-      # the check and strand branch protection waiting for a vanished status.
-      - name: Test both workspaces in UTC
-        run: |
-          TZ=UTC npm run test --workspace apps/api
-          TZ=UTC npm run test --workspace apps/web
+      # Server `date` reads break east of UTC; keep this existing API sweep.
+      - name: Test API in UTC (server date-read contrast)
+        run: TZ=UTC npm run test --workspace apps/api
+
+      # The negative offset is what makes accidental client Date parsing fail.
+      - name: Test web in America/New_York (client date-only guard)
+        run: TZ=America/New_York npm run test --workspace apps/web
 
       # The build is what the production image runs, and a type error in a
       # test file fails it — worth catching here rather than in a Docker layer.

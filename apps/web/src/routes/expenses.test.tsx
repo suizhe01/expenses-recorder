@@ -6,7 +6,7 @@ import { createClient } from '@/api/client';
 import { expenseQuery, type Expense } from '@/api/expenses';
 import type { ExportsApi } from '@/api/exports';
 import type { DownloadResult } from '@/export/download';
-import { ExpensesScreen, groupExpenses, monthLabel } from '@/routes/expenses';
+import { ExpensesScreen, groupExpenses, monthKey, monthLabel } from '@/routes/expenses';
 import { SessionProvider } from '@/session/context';
 import { createSessionManager } from '@/session/session';
 import { fakeStorage, session } from '@/test/support';
@@ -39,6 +39,12 @@ describe('expense list', () => {
     expect(monthLabel(groups[0]!.month)).toBe('August 2026');
     expect(groups[0]!.totals).toEqual(new Map([['MYR', 1200], ['SGD', 750]]));
     expect(monthLabel(groupExpenses([{ ...expenses[0]!, purchasedOn: '2026-08-01' }])[0]!.month)).toBe('August 2026');
+  });
+
+  it('EXP-36 AC-6: keeps a date-only first of month in its own month west of UTC', () => {
+    // `new Date('2026-08-01')` would render July in America/New_York. The
+    // production helper must remain string-only, and CI runs this suite there.
+    expect(monthLabel(monthKey('2026-08-01'))).toBe('August 2026');
   });
 
   it('omits an empty query string and encodes only active API filters', () => {

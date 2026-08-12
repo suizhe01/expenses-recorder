@@ -172,11 +172,12 @@ image needs no build toolchain.
   `Can't determine timestamp` on every run — cosmetic, ignore it
 - Tests run **sequentially** (`fileParallelism: false`): the integration suites
   share one database and each truncates
-- Tests also run **east of UTC** — `vitest.config.ts` pins
-  `env: { TZ: 'Asia/Kuala_Lumpur' }`. CI is otherwise UTC, where a date-only bug
-  and a correct implementation give the same answer, which made CI structurally
-  blind to the class of bug above. The container pins `TZ=UTC` so the two are
-  deliberately different
+- Date guards sweep in **opposite directions**: server `date` reads must run
+  east of UTC (`Asia/Kuala_Lumpur`) because `pg` may shift local midnight back
+  a day; client date-only rendering must run west of UTC (`America/New_York`)
+  because `new Date('YYYY-MM-DD')` starts at UTC midnight. Neither zone proves
+  the other workspace safe. The API keeps its `UTC` contrast pass; web keeps
+  its +8 default and runs a New York contrast pass
 - Integration tests use a real Postgres. CI migrates *before* running them
 - The `auth.test.ts` session tests do real scrypt work and take
   `SELECT … FOR UPDATE` locks, so they are the first to fail under machine load.
