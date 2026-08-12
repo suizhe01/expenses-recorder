@@ -231,6 +231,7 @@ export const REQUEST_SCHEMAS: Record<string, RequestEntry> = {
     consumes: ['multipart/form-data'],
     body: RECEIPT_UPLOAD,
   },
+  'POST /exports/token': NO_BODY,
   'DELETE /categories/:id': NO_BODY,
   'DELETE /expenses/:id': NO_BODY,
   'DELETE /receipts/:id': NO_BODY,
@@ -284,11 +285,23 @@ const LINK_TOKEN: JsonSchema = {
   },
 };
 
+/** One-use URL credential for the export download endpoints. */
+const EXPORT_FILTERS: JsonSchema = {
+  ...EXPENSE_FILTERS,
+  properties: {
+    ...EXPENSE_FILTERS.properties as Record<string, JsonSchema>,
+    token: {
+      type: 'string',
+      description: 'Single-use download token returned by POST /exports/token. It expires after 60 seconds.',
+    },
+  },
+};
+
 /** AC-7, AC-8. Same key format as `REQUEST_SCHEMAS`. */
 export const QUERY_SCHEMAS: Record<string, JsonSchema> = {
   'GET /expenses': EXPENSE_FILTERS,
-  'GET /expenses/export.csv': EXPENSE_FILTERS,
-  'GET /expenses/export.zip': EXPENSE_FILTERS,
+  'GET /expenses/export.csv': EXPORT_FILTERS,
+  'GET /expenses/export.zip': EXPORT_FILTERS,
   'GET /auth/verify': LINK_TOKEN,
   'GET /auth/reset-password': LINK_TOKEN,
 };

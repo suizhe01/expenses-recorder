@@ -15,6 +15,8 @@ import { registerResetPasswordRoutes } from './routes/reset-password.js';
 import { registerCategoryRoutes } from './routes/categories.js';
 import { registerReceiptRoutes } from './routes/receipts.js';
 import { registerExpenseRoutes } from './routes/expenses.js';
+import { registerExportTokenRoute } from './routes/exports.js';
+import { requireAuth } from './auth/guard.js';
 import { documentRequests } from './openapi/transform.js';
 import { registerWebApp } from './web.js';
 import { createConsoleTransport, type EmailTransport } from './email/transport.js';
@@ -229,6 +231,16 @@ export function buildApp({
   // unauthenticated login attempts rather than for someone filing receipts.
   app.register(async (scope) => {
     registerExpenseRoutes(scope, { config, database });
+  });
+
+  app.register(async (scope) => {
+    scope.addHook('preHandler', requireAuth);
+    await scope.register(fastifyRateLimit, {
+      global: false,
+      keyGenerator: (request) => request.authenticatedUserId ?? request.ip,
+      hook: 'preHandler',
+    });
+    registerExportTokenRoute(scope, { database });
   });
 
   // EXP-13: receipts get their own scope for the same reason — the guard is a

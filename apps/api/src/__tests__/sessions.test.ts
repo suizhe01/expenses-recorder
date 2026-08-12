@@ -7,6 +7,11 @@ import {
   pruneSessions,
   REVOKED_RETENTION_MS,
 } from '../auth/sessions.js';
+import {
+  createDownloadToken,
+  hashDownloadToken,
+  pruneDownloadTokens,
+} from '../exports/tokens.js';
 
 const config = parseConfig({
   ...process.env,
@@ -149,5 +154,30 @@ describe('pruneSessions', () => {
 
     expect(result.expired + result.revoked).toBe(1);
     expect(await survivingIds()).toHaveLength(0);
+  });
+});
+
+describe('pruneDownloadTokens', () => {
+  it('AC-9: removes used and expired tokens while retaining a live one', async () => {
+    const used = await createDownloadToken(database.pool, userId);
+    const expired = await createDownloadToken(database.pool, userId);
+    const live = await createDownloadToken(database.pool, userId);
+    await database.pool.query(
+      `UPDATE download_tokens SET used_at = now()
+       WHERE token_hash = $1`,
+      [hashDownloadToken(used.token)],
+    );
+    await database.pool.query(
+      `UPDATE download_tokens SET expires_at = now() - interval '1 second'
+       WHERE token_hash = $1`,
+      [hashDownloadToken(expired.token)],
+    );
+
+    expect(await pruneDownloadTokens(database.pool)).toBe(2);
+    const { rows } = await database.pool.query<{ token_hash: string }>(
+      'SELECT token_hash FROM download_tokens',
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.token_hash).toBe(hashDownloadToken(live.token));
   });
 });
