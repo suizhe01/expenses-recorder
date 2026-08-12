@@ -60,7 +60,7 @@ describe('route guards (AC-6)', () => {
       'stored-refresh',
     );
 
-    expect(await screen.findByRole('heading', { name: 'Receipts' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Overview' })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Create account' })).not.toBeInTheDocument();
   });
 });

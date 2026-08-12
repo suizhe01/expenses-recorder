@@ -3,7 +3,7 @@ import { SessionProvider, useSession } from '@/session/context';
 import { SignInScreen } from '@/routes/sign-in';
 import { SignUpScreen } from '@/routes/sign-up';
 import { CheckEmailScreen } from '@/routes/check-email';
-import { HomeScreen } from '@/routes/home';
+import { OverviewScreen } from '@/routes/overview';
 import { ConfirmReceiptScreen } from '@/routes/confirm-receipt';
 import { ExpensesScreen } from '@/routes/expenses';
 import { CLIENT_ROUTES } from '@/client-routes';
@@ -51,7 +51,7 @@ export function Routing() {
       />
       <Route
         path={CLIENT_ROUTES.home}
-        element={signedIn ? <HomeScreen /> : <Navigate to={CLIENT_ROUTES.signIn} replace />}
+        element={signedIn ? <OverviewScreen /> : <Navigate to={CLIENT_ROUTES.signIn} replace />}
       />
       <Route path={CLIENT_ROUTES.confirmReceipt} element={signedIn ? <ConfirmReceiptScreen /> : <Navigate to={CLIENT_ROUTES.signIn} replace />} />
       <Route path={CLIENT_ROUTES.catchAll} element={<Navigate to={signedIn ? CLIENT_ROUTES.home : CLIENT_ROUTES.signIn} replace />} />
