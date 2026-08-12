@@ -28,11 +28,15 @@ export type ExpenseRow = {
   deleted_at: Date | null;
 };
 
-export type ExpenseItem = {
+export type ExpenseComponent = {
   description?: string | null;
   quantity?: string | null;
   unitPriceCents?: number | null;
   lineTotalCents?: number | null;
+};
+
+export type ExpenseItem = ExpenseComponent & {
+  components?: ExpenseComponent[];
 };
 
 /** AC-11. Ids plus the category's name, so a list renders without a second call. */

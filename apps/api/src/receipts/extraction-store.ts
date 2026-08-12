@@ -32,11 +32,15 @@ export type ExtractionRow = {
   created_at: Date;
 };
 
-export type ExtractionItem = {
+export type ExtractionComponent = {
   description: string | null;
   quantity: string | null;
   unitPriceCents: number | null;
   lineTotalCents: number | null;
+};
+
+export type ExtractionItem = ExtractionComponent & {
+  components: ExtractionComponent[];
 };
 
 /**

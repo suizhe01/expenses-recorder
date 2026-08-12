@@ -144,7 +144,7 @@ const roundingCentsSchema = z
   .int({ message: 'must be a whole number of cents' })
   .nullable();
 
-const itemSchema = z.object({
+const componentSchema = z.object({
   description: textSchema(500).optional(),
   quantity: textSchema(50).optional(),
   unitPriceCents: componentCentsSchema.optional(),
@@ -156,12 +156,36 @@ const itemSchema = z.object({
   lineTotalCents: item.lineTotalCents ?? null,
 }));
 
+const componentsSchema = z.array(componentSchema).max(50, {
+  message: 'must contain at most 50 components',
+}).transform((components) => components.filter((component) =>
+  component.description !== null
+  || component.quantity !== null
+  || component.unitPriceCents !== null
+  || component.lineTotalCents !== null,
+));
+
+const itemSchema = z.object({
+  description: textSchema(500).optional(),
+  quantity: textSchema(50).optional(),
+  unitPriceCents: componentCentsSchema.optional(),
+  lineTotalCents: componentCentsSchema.optional(),
+  components: componentsSchema.optional(),
+}).transform((item) => ({
+  description: item.description ?? null,
+  quantity: item.quantity ?? null,
+  unitPriceCents: item.unitPriceCents ?? null,
+  lineTotalCents: item.lineTotalCents ?? null,
+  components: item.components ?? [],
+}));
+
 const itemsSchema = z.array(itemSchema).max(200, { message: 'must contain at most 200 items' })
   .transform((items) => items.filter((item) =>
-    item.description !== null && item.description !== undefined
-    || item.quantity !== null && item.quantity !== undefined
-    || item.unitPriceCents !== null && item.unitPriceCents !== undefined
-    || item.lineTotalCents !== null && item.lineTotalCents !== undefined,
+    item.description !== null
+    || item.quantity !== null
+    || item.unitPriceCents !== null
+    || item.lineTotalCents !== null
+    || item.components.length > 0,
   ));
 
 /**
@@ -388,6 +412,18 @@ const expenseResponse = {
           quantity: { type: ['string', 'null'] },
           unitPriceCents: { type: ['integer', 'null'] },
           lineTotalCents: { type: ['integer', 'null'] },
+          components: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                description: { type: ['string', 'null'] },
+                quantity: { type: ['string', 'null'] },
+                unitPriceCents: { type: ['integer', 'null'] },
+                lineTotalCents: { type: ['integer', 'null'] },
+              },
+            },
+          },
         },
       },
     },

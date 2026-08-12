@@ -218,6 +218,12 @@ type Expense = {
     quantity: string | null;
     unitPriceCents: number | null;
     lineTotalCents: number | null;
+    components: {
+      description: string | null;
+      quantity: string | null;
+      unitPriceCents: number | null;
+      lineTotalCents: number | null;
+    }[];
   }[];
   createdAt: string;
   updatedAt: string;
@@ -305,17 +311,31 @@ describe('schema', () => {
 });
 
 describe('POST /expenses', () => {
-  it('EXP-40 AC-5, AC-7: stores item rows, trims text, and drops empty rows', async () => {
+  it('EXP-43 AC-6, AC-8: stores one-level components, trims text, and drops empty rows', async () => {
     const { token } = await account('item-create@example.com');
     const expense = await anExpense(token, {
       items: [
-        { description: '  Roti canai ', quantity: ' 2 ', unitPriceCents: 150, lineTotalCents: 300 },
+        {
+          description: '  Roti canai set ', quantity: ' 2 ', unitPriceCents: 150, lineTotalCents: 300,
+          components: [
+            { description: '  Curry ', quantity: '', unitPriceCents: null, lineTotalCents: null },
+            { description: '', quantity: '', unitPriceCents: null, lineTotalCents: null },
+          ],
+        },
         { description: ' ', quantity: '', unitPriceCents: null, lineTotalCents: null },
+        { components: [{ description: 'Tea', quantity: '1', unitPriceCents: 50, lineTotalCents: 50 }] },
       ],
     });
 
     expect(expense.items).toEqual([
-      { description: 'Roti canai', quantity: '2', unitPriceCents: 150, lineTotalCents: 300 },
+      {
+        description: 'Roti canai set', quantity: '2', unitPriceCents: 150, lineTotalCents: 300,
+        components: [{ description: 'Curry', quantity: null, unitPriceCents: null, lineTotalCents: null }],
+      },
+      {
+        description: null, quantity: null, unitPriceCents: null, lineTotalCents: null,
+        components: [{ description: 'Tea', quantity: '1', unitPriceCents: 50, lineTotalCents: 50 }],
+      },
     ]);
     expect((await fetchOne(token, expense.id)).json()).toMatchObject({ items: expense.items });
     expect((await list(token)).json()).toMatchObject([{ items: expense.items }]);
@@ -338,6 +358,28 @@ describe('POST /expenses', () => {
       expect(response.statusCode).toBe(400);
       expect(fields(response)).toHaveProperty(`items.0.${field}`);
     }
+  });
+
+  it('EXP-43 AC-8: rejects malformed component fields and caps components', async () => {
+    const { token } = await account('component-invalid@example.com');
+    for (const [field, value] of [
+      ['description', 'x'.repeat(501)],
+      ['quantity', 'x'.repeat(51)],
+      ['unitPriceCents', -1],
+      ['lineTotalCents', 1.5],
+    ] as const) {
+      const response = await create(token, await minimal(token, {
+        items: [{ components: [{ [field]: value }] }],
+      }));
+      expect(response.statusCode).toBe(400);
+      expect(fields(response)).toHaveProperty(`items.0.components.0.${field}`);
+    }
+
+    const response = await create(token, await minimal(token, {
+      items: [{ components: Array.from({ length: 51 }, () => ({ description: 'part' })) }],
+    }));
+    expect(response.statusCode).toBe(400);
+    expect(fields(response)).toHaveProperty('items.0.components');
   });
   it('AC-4: records an expense from the three required fields', async () => {
     const { token } = await account('create@example.com');
