@@ -60,10 +60,12 @@ export function HomeScreen() {
   const known = state.status === 'signed-in' ? state.user.email : undefined;
 
   return (
-    <main className="flex min-h-dvh items-start justify-center p-4">
+    <main className="flex min-h-dvh w-full items-start justify-center overflow-x-hidden p-4">
       <Card className="mt-8 w-full max-w-sm">
         <CardHeader>
-          <CardTitle>Signed in</CardTitle>
+          <CardTitle role="heading" aria-level={1}>
+            Signed in
+          </CardTitle>
         </CardHeader>
 
         <CardContent className="grid gap-4">
@@ -76,8 +78,8 @@ export function HomeScreen() {
           <p className="text-sm break-all">{email ?? known ?? 'Loading…'}</p>
 
           <p className="text-muted-foreground text-sm">
-            Receipts, expenses and export are not built yet — this screen only
-            proves the session works.
+            Receipt, expense and export screens come next — this page confirms
+            your session.
           </p>
 
           <Button

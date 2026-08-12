@@ -1,16 +1,18 @@
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router';
 import { SessionProvider, useSession } from '@/session/context';
 import { SignInScreen } from '@/routes/sign-in';
+import { SignUpScreen } from '@/routes/sign-up';
+import { CheckEmailScreen } from '@/routes/check-email';
 import { HomeScreen } from '@/routes/home';
 
 /**
  * The route table plus the signed-in/signed-out split.
  *
- * Part A keeps this deliberately small — two routes. The full guard treatment,
- * with tests in both directions, is AC-6 of part B, which is where the gap
- * EXP-24 left open gets closed.
+ * AC-6. Every route goes through one signed-in/signed-out split. Authenticated
+ * users cannot drift back into an auth form, and unauthenticated users never
+ * render the private screen before being redirected.
  */
-function Routing() {
+export function Routing() {
   const { state } = useSession();
 
   if (state.status === 'restoring') {
@@ -34,6 +36,14 @@ function Routing() {
       <Route
         path="/sign-in"
         element={signedIn ? <Navigate to="/" replace /> : <SignInScreen />}
+      />
+      <Route
+        path="/sign-up"
+        element={signedIn ? <Navigate to="/" replace /> : <SignUpScreen />}
+      />
+      <Route
+        path="/check-email"
+        element={signedIn ? <Navigate to="/" replace /> : <CheckEmailScreen />}
       />
       <Route
         path="/"

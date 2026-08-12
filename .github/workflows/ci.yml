@@ -98,21 +98,6 @@ jobs:
       - name: Test
         run: npm run test --workspace apps/api
 
-      # EXP-24 AC-16. The mobile workspace joins the same required check, so
-      # one green `ci` still covers the repository.
-      #
-      # These need no database and no device: the session logic takes its
-      # transport and storage as dependencies, so nothing here touches the
-      # network or a native module.
-      - name: Lint (mobile)
-        run: npm run lint --workspace apps/mobile
-
-      - name: Typecheck (mobile)
-        run: npm run typecheck --workspace apps/mobile
-
-      - name: Test (mobile)
-        run: npm run test --workspace apps/mobile
-
       # EXP-25 AC-10. The web workspace joins the same required check. It needs
       # no database and no browser: the transport and storage are injected, so
       # nothing here touches the network.

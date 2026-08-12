@@ -4,7 +4,9 @@ Receipt capture and expense archive. Snap a receipt, have it read automatically,
 confirm the extracted fields, and keep the original image for as long as you may
 need to produce it.
 
-This repository currently contains the API foundation only. See the
+The Fastify API and Vite web app ship together from one origin. The current web
+flow supports account creation, email-verification hand-off, sign-in, session
+restoration and sign-out. See the
 [EXP issue chain](https://linear.app/tay-sui-zhe/team/EXP/all) for what lands next.
 
 ## Prerequisites
@@ -58,7 +60,8 @@ rollback support.
 
 ## Development without containers
 
-With the compose database running, the API can run directly on the host:
+With the compose database running, start the API and web development servers in
+separate terminals:
 
 ```bash
 cd apps/api
@@ -66,19 +69,18 @@ npm install
 npm run dev            # tsx watch, restarts on change
 ```
 
-## Checks
-
 ```bash
-cd apps/api
-
-npm run lint           # eslint
-npm run typecheck      # tsc --noEmit
-npm test               # vitest
-npm run build          # tsc --build -> dist/
+cd apps/web
+npm run dev            # Vite at http://localhost:5173, proxying API calls
 ```
 
-All four also run in CI on every pull request, against a real Postgres service
-container.
+## Checks
+
+From the repository root, `npm run lint`, `npm run typecheck`, and `npm test`
+cover both workspaces. `npm run build --workspace apps/api` and
+`npm run build --workspace apps/web` produce the deployable API and browser app.
+The same checks run in CI on every pull request, with the API tests using a real
+Postgres service container.
 
 ## Configuration
 
@@ -120,7 +122,7 @@ node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| POST | `/auth/register` | Create an account, returns both tokens |
+| POST | `/auth/register` | Create an account, returns a fixed check-email message |
 | POST | `/auth/login` | Exchange credentials for both tokens |
 | POST | `/auth/refresh` | Rotate: returns a new access AND refresh token |
 | POST | `/auth/logout` | Revoke the presented session only |
@@ -245,14 +247,18 @@ stored as salted scrypt digests.
 ```
 .
 ├── apps/
-│   └── api/                  Fastify + TypeScript service
-│       ├── migrations/       node-pg-migrate migrations
+│   ├── api/                  Fastify + TypeScript service
+│   │   ├── migrations/       node-pg-migrate migrations
+│   │   └── src/
+│   │       ├── app.ts        builds the Fastify instance
+│   │       ├── config.ts     env schema, fail-fast validation
+│   │       ├── db.ts         pg pool and reachability probe
+│   │       ├── index.ts      startup and graceful shutdown
+│   │       └── routes/
+│   └── web/                  Vite + React browser app
 │       └── src/
-│           ├── app.ts        builds the Fastify instance
-│           ├── config.ts     env schema, fail-fast validation
-│           ├── db.ts         pg pool and reachability probe
-│           ├── index.ts      startup and graceful shutdown
-│           └── routes/
+│           ├── routes/       auth and signed-in screens
+│           └── session/      rotation, restore, and Web Storage adapter
 ├── docker-compose.yml        Postgres 16 + API
 └── .github/workflows/ci.yml  lint, typecheck, test, migrations
 ```

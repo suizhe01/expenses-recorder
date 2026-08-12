@@ -9,17 +9,9 @@
     "node": ">=22"
   },
   "scripts": {
-    "lint": "npm run lint --workspace apps/api && npm run lint --workspace apps/mobile && npm run lint --workspace apps/web",
-    "typecheck": "npm run typecheck --workspace apps/api && npm run typecheck --workspace apps/mobile && npm run typecheck --workspace apps/web",
-    "test": "npm run test --workspace apps/api && npm run test --workspace apps/mobile && npm run test --workspace apps/web",
+    "lint": "npm run lint --workspace apps/api && npm run lint --workspace apps/web",
+    "typecheck": "npm run typecheck --workspace apps/api && npm run typecheck --workspace apps/web",
+    "test": "npm run test --workspace apps/api && npm run test --workspace apps/web",
     "migrate": "npm run migrate --workspace apps/api"
-  },
-  "overrides": {
-    "react": "$react",
-    "react-dom": "$react-dom"
-  },
-  "devDependencies": {
-    "react": "19.2.3",
-    "react-dom": "19.2.3"
   }
 }

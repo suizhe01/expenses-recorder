@@ -4,13 +4,14 @@ Receipt capture and expense archive for a Malaysian individual. Snap a receipt,
 have it read automatically, confirm the extracted fields, keep the original
 image for as long as you might need to produce it.
 
-**Status:** backend only, and the whole capture-to-record path works. Auth
+**Status:** the API capture-to-record path works, and a same-origin Vite web app
+now provides account creation, verification hand-off, sign-in, session restore,
+and sign-out. Auth
 (registration, login, refresh with rotation, logout, email verification,
 password reset), category CRUD, receipt upload with on-disk storage, Gemini
 extraction of the tax-invoice fields, **expense CRUD**, and **filtering the
 expense list** are all merged. Extraction is verified against real photographs,
-not only tests. An OpenAPI document is served at `/docs` in development. No
-mobile app exists.
+not only tests. An OpenAPI document is served at `/docs` in development.
 
 An expense may have zero or one receipt, and a receipt backs at most one *live*
 expense — enforced by a partial unique index, so deleting an expense frees its
@@ -18,10 +19,10 @@ receipt to be confirmed again. The tax-invoice fields are **copied** at confirm
 rather than read back through `receipt_extractions`, so an expense is a
 standalone record and editing it never disturbs what the model actually read.
 
-**Next is the export chain.** `GET /expenses` already takes `from`, `to`,
-`categoryId` (repeatable) and `hasReceipt`; the streaming CSV and the streaming
-ZIP of images are the two issues that consume it. Project memory holds the
-agreed order and the decisions already settled for both.
+**Next is the browser expense workflow.** The API, CSV export and ZIP export are
+already complete; the next specs should expose receipt capture, confirmation,
+expense browsing and export through the web app. Project memory holds the
+decisions already settled for the backend contracts.
 
 **The `GEMINI_API_KEY` in `.env` stopped working on 2026-08-10** (HTTP 401 —
 rotated or expired, not leaked; `.env` has never been committed). Until a new key
@@ -216,5 +217,5 @@ Two limits still apply, and both bite later rather than now:
   It needs no domain and no DNS, but it **only delivers to the address on the
   Resend account**. Reaching anyone else means verifying a domain you own.
 - `PUBLIC_BASE_URL` is `http://localhost:3000`, so every emailed link only
-  opens on the development machine. That is fine until the Expo app or the
-  deploy runbook arrives, at which point it must change.
+  opens on the development machine. Set it to the deployed same-origin URL
+  before relying on verification or reset links away from that machine.
