@@ -34,7 +34,7 @@ function monthChoices(expenses: Expense[], selected: string): string[] {
 export function OverviewScreen({
   expensesApi,
   receiptsApi,
-}: { expensesApi?: ExpensesApi; receiptsApi?: ReceiptsApi } = {}) {
+}: { expensesApi?: Pick<ExpensesApi, 'list'>; receiptsApi?: ReceiptsApi } = {}) {
   const { session } = useSession();
   const defaultExpenses = useMemo(
     () => createExpensesApi(createClient("", (url, init) => fetch(url, init))),

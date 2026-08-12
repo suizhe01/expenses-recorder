@@ -13,6 +13,7 @@ import { COLLAPSED_KEYS, ExpenseForm, changedFields, fieldsFromExpense, validate
 import { useSession } from '@/session/context';
 import { formatMoney } from '@/routes/expenses';
 import { formatPurchasedOn } from '@/routes/home';
+import { CLIENT_ROUTES } from '@/client-routes';
 
 const NOT_FOUND = 'Expense not found';
 const transport = (url: string, init: RequestInit) => fetch(url, init);
@@ -22,7 +23,7 @@ const transport = (url: string, init: RequestInit) => fetch(url, init);
  * and delete.
  */
 export function ExpenseDetailScreen({ expensesApi, categoriesApi, receiptsApi }: { expensesApi?: Pick<ExpensesApi, 'get' | 'update' | 'remove'>; categoriesApi?: CategoriesApi; receiptsApi?: Pick<ReceiptsApi, 'image'> } = {}) {
-  const { id = '' } = useParams();
+  const { expenseId: id = '' } = useParams();
   const navigate = useNavigate();
   const { session } = useSession();
   const request = useMemo(() => createClient('', transport), []);
@@ -51,7 +52,7 @@ export function ExpenseDetailScreen({ expensesApi, categoriesApi, receiptsApi }:
   const [notice, setNotice] = useState<string>();
   const [fatal, setFatal] = useState<string>();
 
-  function leave(text: string) { navigate('/expenses', { replace: true, state: { notice: text } }); }
+  function leave(text: string) { navigate(CLIENT_ROUTES.expenses, { replace: true, state: { notice: text } }); }
 
   async function loadCategories() {
     const result = await session.authorized((token) => categoryApi.list(token));
@@ -151,7 +152,7 @@ export function ExpenseDetailScreen({ expensesApi, categoriesApi, receiptsApi }:
 
   return <main className="mx-auto min-h-dvh w-full max-w-xl overflow-x-hidden px-4 pb-28">
     <header className="flex items-center gap-2 py-3">
-      <Button type="button" variant="ghost" size="icon" className="size-11" onClick={() => navigate('/expenses')} aria-label="Back"><ChevronLeft /></Button>
+      <Button type="button" variant="ghost" size="icon" className="size-11" onClick={() => navigate(CLIENT_ROUTES.expenses)} aria-label="Back"><ChevronLeft /></Button>
       <h1 className="font-heading text-lg font-semibold">{editing ? 'Edit expense' : 'Expense'}</h1>
     </header>
 

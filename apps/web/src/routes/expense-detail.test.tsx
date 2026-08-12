@@ -10,6 +10,7 @@ import { HomeScreen } from '@/routes/home';
 import { SessionProvider } from '@/session/context';
 import { createSessionManager } from '@/session/session';
 import { fakeStorage, session } from '@/test/support';
+import { CLIENT_ROUTES, expenseDetailPath } from '@/client-routes';
 
 const filed: Expense = {
   id: 'exp-1', category: { id: 'cat-1', name: 'Food' }, receiptId: 'receipt-1',
@@ -60,10 +61,10 @@ async function mount(options: Options = {}) {
   await manager.signIn('someone@example.com', 'password');
   const view = render(
     <SessionProvider manager={manager}>
-      <MemoryRouter initialEntries={[`/expenses/${row.id}`]}>
+      <MemoryRouter initialEntries={[expenseDetailPath(row.id)]}>
         <Routes>
-          <Route path="/expenses/:id" element={<ExpenseDetailScreen expensesApi={{ get, update, remove }} categoriesApi={{ list }} receiptsApi={{ image }} />} />
-          <Route path="/expenses" element={<Archive />} />
+          <Route path={CLIENT_ROUTES.expenseDetail} element={<ExpenseDetailScreen expensesApi={{ get, update, remove }} categoriesApi={{ list }} receiptsApi={{ image }} />} />
+          <Route path={CLIENT_ROUTES.expenses} element={<Archive />} />
         </Routes>
       </MemoryRouter>
     </SessionProvider>,

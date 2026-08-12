@@ -6,7 +6,7 @@ import { Routing } from '@/app';
 import { SessionProvider } from '@/session/context';
 import { createSessionManager, SESSION_ENDED } from '@/session/session';
 import { fakeStorage, fakeTransport, session } from '@/test/support';
-import { CLIENT_ROUTES, confirmReceiptPath } from '@/client-routes';
+import { CLIENT_ROUTES, confirmReceiptPath, expenseDetailPath } from '@/client-routes';
 
 beforeEach(() => {
   vi.stubGlobal('fetch', vi.fn(async () => new Response('[]', {
@@ -93,6 +93,27 @@ describe('direct loads of the moved routes (EXP-37 AC-3, AC-8)', () => {
     const active = session();
     mount(
       `${CLIENT_ROUTES.expenses}?from=2026-08-01&hasReceipt=true`,
+      {
+        '/auth/refresh': { status: 200, body: active },
+        '/auth/me': { status: 200, body: active.user },
+      },
+      'stored-refresh',
+    );
+
+    expect(await screen.findByRole('heading', { name: 'Expenses' })).toBeInTheDocument();
+  });
+
+  it('renders the expense detail URL through the app rather than an API response', async () => {
+    vi.mocked(fetch).mockImplementation(async (input) => {
+      const path = new URL(String(input), 'http://test.local').pathname;
+      return new Response(JSON.stringify(path === '/expenses/missing-expense' ? { error: 'Expense not found' } : []), {
+        status: path === '/expenses/missing-expense' ? 404 : 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    });
+    const active = session();
+    mount(
+      expenseDetailPath('missing-expense'),
       {
         '/auth/refresh': { status: 200, body: active },
         '/auth/me': { status: 200, body: active.user },

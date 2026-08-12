@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Filter, Search, X } from 'lucide-react';
-import { useLocation, useSearchParams } from 'react-router';
+import { Link, useLocation, useSearchParams } from 'react-router';
 import { createClient } from '@/api/client';
 import { createExpensesApi, type Expense, type ExpenseFilters, type ExpensesApi } from '@/api/expenses';
 import { createCategoriesApi, type Category } from '@/api/categories';
@@ -12,6 +12,7 @@ import { Sheet, SheetClose, SheetContent, SheetDescription, SheetFooter, SheetHe
 import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useSession } from '@/session/context';
+import { expenseDetailPath } from '@/client-routes';
 
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 
@@ -108,6 +109,6 @@ function Filters({ filters, categories, count, onApply }: { filters: ExpenseFilt
 }
 
 // EXP-31 AC-1. The whole row is the link, matching the inbox row's anatomy.
-function ExpenseRow({ expense }: { expense: Expense }) { return <article className="border-b dark:border-border"><a href={`/expenses/${expense.id}`} className="grid min-h-16 grid-cols-[minmax(0,1fr)_auto] items-center gap-3 py-3"><div className="min-w-0"><p className="truncate font-medium">{expense.merchantName ?? 'No merchant'}</p><p className="truncate text-sm text-muted-foreground">{expense.category.name} · {dayOfMonth(expense.purchasedOn)}</p></div><p className="text-right font-medium tabular-nums">{formatMoney(expense.totalCents, expense.currency)}</p></a></article>; }
+function ExpenseRow({ expense }: { expense: Expense }) { return <article className="border-b dark:border-border"><Link to={expenseDetailPath(expense.id)} className="grid min-h-16 grid-cols-[minmax(0,1fr)_auto] items-center gap-3 py-3"><div className="min-w-0"><p className="truncate font-medium">{expense.merchantName ?? 'No merchant'}</p><p className="truncate text-sm text-muted-foreground">{expense.category.name} · {dayOfMonth(expense.purchasedOn)}</p></div><p className="text-right font-medium tabular-nums">{formatMoney(expense.totalCents, expense.currency)}</p></Link></article>; }
 function ExpenseSkeletons() { return <div className="grid gap-2" aria-label="Loading expenses">{[1, 2, 3, 4].map((n) => <div key={n} className="grid min-h-16 grid-cols-[1fr_auto] items-center gap-3 border-b py-3 dark:border-border"><div className="grid gap-2"><Skeleton className="h-4 w-36" /><Skeleton className="h-3 w-20" /></div><Skeleton className="h-4 w-16" /></div>)}</div>; }
 function Empty({ title, clear }: { title: string; clear?: () => void }) { return <div className="rounded-xl border border-dashed p-8 text-center dark:border-border"><p className="font-medium">{title}</p>{clear && <Button variant="link" className="mt-2" onClick={clear}><X aria-hidden="true" />Clear all</Button>}</div>; }

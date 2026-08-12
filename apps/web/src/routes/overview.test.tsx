@@ -11,11 +11,12 @@ import { createSessionManager } from '@/session/session';
 import { fakeStorage, session } from '@/test/support';
 import { CLIENT_ROUTES, confirmReceiptPath } from '@/client-routes';
 
+const blank = { purchasedAtTime: null, subtotalCents: null, taxCents: null, roundingCents: null, merchantTaxId: null, paymentMethod: null, createdAt: '', updatedAt: '' };
 const expenses: Expense[] = [
-  { id: 'one', category: { id: 'food', name: 'Food' }, receiptId: null, totalCents: 1200, purchasedOn: '2026-08-01', currency: 'MYR', merchantName: null, receiptNumber: null, note: null },
-  { id: 'two', category: { id: 'travel', name: 'Travel' }, receiptId: null, totalCents: 800, purchasedOn: '2026-08-02', currency: 'MYR', merchantName: null, receiptNumber: null, note: null },
-  { id: 'three', category: { id: 'food', name: 'Food' }, receiptId: null, totalCents: 900, purchasedOn: '2026-07-01', currency: 'MYR', merchantName: null, receiptNumber: null, note: null },
-  { id: 'four', category: { id: 'food', name: 'Food' }, receiptId: null, totalCents: 5000, purchasedOn: '2026-08-01', currency: 'SGD', merchantName: null, receiptNumber: null, note: null },
+  { id: 'one', category: { id: 'food', name: 'Food' }, receiptId: null, totalCents: 1200, purchasedOn: '2026-08-01', currency: 'MYR', merchantName: null, receiptNumber: null, note: null, ...blank },
+  { id: 'two', category: { id: 'travel', name: 'Travel' }, receiptId: null, totalCents: 800, purchasedOn: '2026-08-02', currency: 'MYR', merchantName: null, receiptNumber: null, note: null, ...blank },
+  { id: 'three', category: { id: 'food', name: 'Food' }, receiptId: null, totalCents: 900, purchasedOn: '2026-07-01', currency: 'MYR', merchantName: null, receiptNumber: null, note: null, ...blank },
+  { id: 'four', category: { id: 'food', name: 'Food' }, receiptId: null, totalCents: 5000, purchasedOn: '2026-08-01', currency: 'SGD', merchantName: null, receiptNumber: null, note: null, ...blank },
 ];
 const receipt: Receipt = { id: 'receipt-1', contentType: 'image/jpeg', byteSize: 3, originalFilename: 'lunch.jpg', createdAt: '2026-08-01T00:00:00Z', expenseId: null, extraction: null };
 
