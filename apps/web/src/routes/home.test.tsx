@@ -1,5 +1,6 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { MemoryRouter, Route, Routes } from 'react-router';
 import { createAuthApi } from '@/api/auth';
 import { createClient } from '@/api/client';
 import { createReceiptsApi, type Receipt } from '@/api/receipts';
@@ -7,6 +8,7 @@ import { HomeScreen, formatCreatedAt, formatMoney, formatPurchasedOn } from '@/r
 import { SessionProvider } from '@/session/context';
 import { createSessionManager } from '@/session/session';
 import { fakeStorage, fakeTransport, session } from '@/test/support';
+import { CLIENT_ROUTES, confirmReceiptPath } from '@/client-routes';
 
 const created: Receipt = {
   id: 'receipt-1', contentType: 'image/jpeg', byteSize: 4,
@@ -18,7 +20,16 @@ async function mount(routes: Parameters<typeof fakeTransport>[0]) {
   const http = fakeTransport({ '/auth/refresh': { status: 200, body: session() }, ...routes });
   const manager = createSessionManager({ auth: createAuthApi(createClient('', http.transport)), storage: fakeStorage() });
   await manager.signIn('someone@example.com', 'password');
-  render(<SessionProvider manager={manager}><HomeScreen receiptsApi={createReceiptsApi(createClient('', http.transport))} /></SessionProvider>);
+  render(
+    <SessionProvider manager={manager}>
+      <MemoryRouter initialEntries={[CLIENT_ROUTES.home]}>
+        <Routes>
+          <Route path={CLIENT_ROUTES.home} element={<HomeScreen receiptsApi={createReceiptsApi(createClient('', http.transport))} />} />
+          <Route path={CLIENT_ROUTES.confirmReceipt} element={<h1>Confirm receipt</h1>} />
+        </Routes>
+      </MemoryRouter>
+    </SessionProvider>,
+  );
   return http;
 }
 
@@ -43,6 +54,22 @@ describe('receipt inbox', () => {
     expect(formatMoney(2685, null)).toBe('RM 26.85');
     expect(formatPurchasedOn('2026-08-08')).toBe('8 Aug 2026');
     expect(formatCreatedAt('2026-08-11T07:42:00.000Z')).toMatch(/^11 Aug, \d{1,2}:42 (am|pm)$/);
+  });
+
+  /**
+   * EXP-37 AC-2. A raw `<a href>` renders identically here and passes any test
+   * that only inspects the markup — but it is a document request, which is
+   * what triggered the route collision and would discard the in-memory access
+   * token on every tap. Asserting the destination screen renders is what makes
+   * this fail on an anchor: happy-dom performs no navigation.
+   */
+  it('opens the confirm screen client-side when a row is tapped', async () => {
+    await mount({ '/auth/login': { status: 200, body: session() }, '/receipts': { status: 200, body: [created] } });
+
+    await userEvent.click(await screen.findByText('Corner Cafe'));
+
+    expect(await screen.findByRole('heading', { name: 'Confirm receipt' })).toBeInTheDocument();
+    expect(confirmReceiptPath('receipt-1')).toBe('/confirm/receipt-1');
   });
 
   it('rejects oversized and wrong-type files without a request', async () => {
@@ -84,7 +111,7 @@ describe('receipt inbox', () => {
     };
     const manager = createSessionManager({ auth: createAuthApi(createClient('', transport)), storage: fakeStorage() });
     await manager.signIn('someone@example.com', 'password');
-    const view = render(<SessionProvider manager={manager}><HomeScreen receiptsApi={createReceiptsApi(createClient('', transport))} /></SessionProvider>);
+    const view = render(<SessionProvider manager={manager}><MemoryRouter><HomeScreen receiptsApi={createReceiptsApi(createClient('', transport))} /></MemoryRouter></SessionProvider>);
     await userEvent.upload(await screen.findByLabelText('Add receipt'), new File(['jpeg'], 'lunch.jpg', { type: 'image/jpeg' }));
     expect(await screen.findByText('Could not reach the server. Check your connection.')).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: 'Retry' }));

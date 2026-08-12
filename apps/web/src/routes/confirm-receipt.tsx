@@ -18,7 +18,7 @@ const hidden = new Set(['purchasedAtTime','merchantTaxId','receiptNumber','subto
 const transport = (url: string, init: RequestInit) => fetch(url, init);
 
 export function ConfirmReceiptScreen() {
-  const { id = '' } = useParams(); const navigate = useNavigate(); const { session } = useSession();
+  const { receiptId: id = '' } = useParams(); const navigate = useNavigate(); const { session } = useSession();
   const request = useMemo(() => createClient('', transport), []);
   const receiptsApi = useMemo(() => createReceiptsApi(request), [request]);
   const categoriesApi = useMemo(() => createCategoriesApi(request), [request]);
