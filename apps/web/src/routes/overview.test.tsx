@@ -37,6 +37,7 @@ describe('overview', () => {
     expect(screen.getByText('1 to file')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /lunch.jpg/i })).toHaveAttribute('href', confirmReceiptPath('receipt-1'));
     expect(screen.getByRole('link', { name: /overview/i })).toHaveAttribute('aria-current', 'page');
+    expect(screen.getByRole('link', { name: 'Settings' })).toHaveAttribute('href', CLIENT_ROUTES.settings);
   });
   it('omits the to-file section when no receipt is waiting and shows a capture prompt for an empty archive', async () => {
     await mount([], []);

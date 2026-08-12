@@ -20,6 +20,8 @@ export const CLIENT_ROUTES = {
   home: '/',
   expenses: '/expense',
   expenseDetail: '/expense/:expenseId',
+  settings: '/settings',
+  categories: '/settings/categories',
   confirmReceipt: '/confirm/:receiptId',
   catchAll: '*',
 } as const;

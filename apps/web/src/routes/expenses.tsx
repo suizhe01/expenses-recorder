@@ -37,7 +37,7 @@ function filtersFromSearch(search: URLSearchParams): ExpenseFilters {
 
 function filterCount(filters: ExpenseFilters): number { return Number(Boolean(filters.from)) + Number(Boolean(filters.to)) + (filters.categoryId?.length ?? 0) + Number(filters.hasReceipt !== undefined); }
 
-export function ExpensesScreen({ expensesApi, categoriesApi }: { expensesApi?: Pick<ExpensesApi, 'list'>; categoriesApi?: ReturnType<typeof createCategoriesApi> } = {}) {
+export function ExpensesScreen({ expensesApi, categoriesApi }: { expensesApi?: Pick<ExpensesApi, 'list'>; categoriesApi?: Pick<ReturnType<typeof createCategoriesApi>, 'list'> } = {}) {
   const { session } = useSession();
   const [searchParams, setSearchParams] = useSearchParams();
   const defaultExpenses = useMemo(() => createExpensesApi(createClient('', (url, init) => fetch(url, init))), []);
