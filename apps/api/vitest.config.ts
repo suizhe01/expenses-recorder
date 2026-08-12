@@ -20,6 +20,6 @@ export default defineConfig({
     // Pinning the developers' own zone means the suite reproduces the machine
     // this project is actually written on, and any future date-only read that
     // goes through a Date fails here rather than in production.
-    env: { TZ: 'Asia/Kuala_Lumpur' },
+    env: { TZ: process.env.TZ ?? 'Asia/Kuala_Lumpur' },
   },
 });
