@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { LoaderCircle, ReceiptText, Trash2, Upload } from 'lucide-react';
 import { Link } from 'react-router';
-import { confirmReceiptPath } from '@/client-routes';
+import { CLIENT_ROUTES, confirmReceiptPath } from '@/client-routes';
 import { createClient } from '@/api/client';
 import { createReceiptsApi, type Receipt, type ReceiptsApi } from '@/api/receipts';
 import { describeFailure } from '@/api/messages';
@@ -38,7 +38,7 @@ export function formatMoney(cents: number, currency: string | null): string {
 type Notice = { text: string; alert: boolean; offline?: boolean };
 
 export function HomeScreen({ receiptsApi }: { receiptsApi?: ReceiptsApi } = {}) {
-  const { state, session } = useSession();
+  const { session } = useSession();
   const defaultApi = useMemo(() => createReceiptsApi(createClient('', (url, init) => fetch(url, init))), []);
   const api = receiptsApi ?? defaultApi;
   const [receipts, setReceipts] = useState<Receipt[]>([]);
@@ -139,12 +139,11 @@ export function HomeScreen({ receiptsApi }: { receiptsApi?: ReceiptsApi } = {}) 
     }
   }
 
-  const email = state.status === 'signed-in' ? state.user.email : '';
   return (
     <main className="mx-auto flex min-h-dvh w-full max-w-xl flex-col overflow-x-hidden px-4 pb-36">
       <header className="flex min-w-0 items-center justify-between gap-3 border-b py-4 dark:border-border">
-        <div className="min-w-0"><h1 className="font-heading text-lg font-semibold">Receipts</h1><p className="truncate text-sm text-muted-foreground">{email}</p></div>
-        <Button variant="outline" className="h-11" onClick={() => void session.signOut()}>Sign out</Button>
+        <div className="min-w-0"><h1 className="font-heading text-lg font-semibold">Receipts</h1><p className="truncate text-sm text-muted-foreground">Waiting to be filed</p></div>
+        <Button asChild variant="outline" className="h-11"><Link to={CLIENT_ROUTES.settings}>Settings</Link></Button>
       </header>
 
       <section className="py-5" aria-labelledby="inbox-heading">

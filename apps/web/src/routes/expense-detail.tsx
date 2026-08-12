@@ -22,7 +22,7 @@ const transport = (url: string, init: RequestInit) => fetch(url, init);
  * EXP-31. One filed expense: every stored field, its receipt image, an edit mode
  * and delete.
  */
-export function ExpenseDetailScreen({ expensesApi, categoriesApi, receiptsApi }: { expensesApi?: Pick<ExpensesApi, 'get' | 'update' | 'remove'>; categoriesApi?: CategoriesApi; receiptsApi?: Pick<ReceiptsApi, 'image'> } = {}) {
+export function ExpenseDetailScreen({ expensesApi, categoriesApi, receiptsApi }: { expensesApi?: Pick<ExpensesApi, 'get' | 'update' | 'remove'>; categoriesApi?: Pick<CategoriesApi, 'list'>; receiptsApi?: Pick<ReceiptsApi, 'image'> } = {}) {
   const { expenseId: id = '' } = useParams();
   const navigate = useNavigate();
   const { session } = useSession();
