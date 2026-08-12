@@ -23,6 +23,7 @@ export const CLIENT_ROUTES = {
   settings: '/settings',
   categories: '/settings/categories',
   confirmReceipt: '/confirm/:receiptId',
+  add: '/add',
   catchAll: '*',
 } as const;
 
