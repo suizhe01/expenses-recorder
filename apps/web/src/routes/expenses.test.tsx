@@ -4,6 +4,8 @@ import { MemoryRouter } from 'react-router';
 import { createAuthApi } from '@/api/auth';
 import { createClient } from '@/api/client';
 import { expenseQuery, type Expense } from '@/api/expenses';
+import type { ExportsApi } from '@/api/exports';
+import type { DownloadResult } from '@/export/download';
 import { ExpensesScreen, groupExpenses, monthLabel } from '@/routes/expenses';
 import { SessionProvider } from '@/session/context';
 import { createSessionManager } from '@/session/session';
@@ -18,14 +20,17 @@ const expenses: Expense[] = [
   { id: 'three', category: { id: 'cat-2', name: 'Travel' }, receiptId: null, totalCents: 3000, purchasedOn: '2026-07-31', currency: 'MYR', merchantName: null, receiptNumber: null, note: 'Train', ...blank },
 ];
 
-async function mount(rows: Expense[] = expenses, initialPath: string | { pathname: string; state: unknown } = CLIENT_ROUTES.expenses, deletedCategory = false) {
+async function mount(rows: Expense[] = expenses, initialPath: string | { pathname: string; state: unknown } = CLIENT_ROUTES.expenses, deletedCategory = false, options: { mint?: ExportsApi['createToken']; csv?: (token: string, filters: Parameters<typeof import('@/export/download').downloadCsv>[1]) => Promise<DownloadResult>; navigate?: (url: string) => void } = {}) {
   const calls: string[] = [];
   const api = { create: vi.fn(), list: vi.fn(async (_token: string, filters) => { calls.push(expenseQuery(filters)); return deletedCategory && filters.categoryId?.length ? { kind: 'error' as const, status: 422, message: 'Category not found' } : { kind: 'ok' as const, status: 200, body: rows }; }) };
   const categoriesApi = { list: vi.fn(async () => ({ kind: 'ok' as const, status: 200, body: [{ id: 'cat-1', name: 'Food', createdAt: '', updatedAt: '' }] })) };
   const manager = createSessionManager({ auth: createAuthApi(createClient('', async () => new Response(JSON.stringify(session()), { status: 200 }))), storage: fakeStorage() });
   await manager.signIn('someone@example.com', 'password');
-  render(<SessionProvider manager={manager}><MemoryRouter initialEntries={[initialPath]}><ExpensesScreen expensesApi={api} categoriesApi={categoriesApi} /></MemoryRouter></SessionProvider>);
-  return { calls, api };
+  const exportsApi = { createToken: options.mint ?? vi.fn(async () => ({ kind: 'ok' as const, status: 201, body: { token: 'download-token', expiresAt: '' } })) };
+  const csvDownload = options.csv ?? vi.fn(async () => ({ ok: true } as const));
+  const zipNavigate = options.navigate ?? vi.fn();
+  render(<SessionProvider manager={manager}><MemoryRouter initialEntries={[initialPath]}><ExpensesScreen expensesApi={api} categoriesApi={categoriesApi} exportsApi={exportsApi} csvDownload={csvDownload} zipNavigate={zipNavigate} /></MemoryRouter></SessionProvider>);
+  return { calls, api, exportsApi, csvDownload, zipNavigate };
 }
 
 describe('expense list', () => {
@@ -89,5 +94,52 @@ describe('expense list', () => {
     expect(await screen.findByText('That category was deleted')).toBeInTheDocument();
     await waitFor(() => expect(calls).toEqual(['?from=2026-08-01&categoryId=cat-deleted&hasReceipt=false', '?from=2026-08-01&hasReceipt=false']));
     expect(screen.getByText('That category was deleted')).toBeInTheDocument();
+  });
+
+  it('EXP-35 AC-1, AC-2, AC-8 and AC-11: explains filtered export scope and ZIP contents', async () => {
+    await mount(expenses, `${CLIENT_ROUTES.expenses}?from=2026-08-01&hasReceipt=false`);
+    await screen.findByText('Kopitiam');
+    await userEvent.type(screen.getByRole('textbox', { name: 'Search expenses' }), 'Kopitiam');
+    await userEvent.click(screen.getByRole('button', { name: 'Export expenses' }));
+    expect(screen.getByText(/dates 2026-08-01 to today; expenses without receipts: 3 expenses/i)).toBeInTheDocument();
+    expect(screen.getByText(/Search text is not applied/i)).toBeInTheDocument();
+    expect(screen.getByText(/Includes receipt images plus expenses.csv/i)).toBeInTheDocument();
+  });
+
+  it('EXP-35 AC-6, AC-7, AC-12: starts CSV once, disables both buttons, and keeps empty exports available', async () => {
+    let resolve!: (value: { ok: true }) => void;
+    const csv = vi.fn(() => new Promise<{ ok: true }>((done) => { resolve = done; }));
+    await mount([], CLIENT_ROUTES.expenses, false, { csv });
+    await screen.findByText('Nothing filed yet');
+    await userEvent.click(screen.getByRole('button', { name: 'Export expenses' }));
+    expect(screen.getByText(/header-only file/i)).toBeInTheDocument();
+    const csvButton = screen.getByRole('button', { name: 'Download CSV' });
+    await userEvent.click(csvButton);
+    expect(screen.getByRole('button', { name: 'Starting CSV…' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Download ZIP' })).toBeDisabled();
+    await userEvent.click(csvButton);
+    expect(csv).toHaveBeenCalledOnce();
+    resolve({ ok: true });
+    expect(await screen.findByText("Download started. Check your browser's downloads.")).toBeInTheDocument();
+  });
+
+  it('EXP-35 AC-4, AC-5 and AC-10: mints once then navigates ZIP; failure keeps the sheet open', async () => {
+    const mint = vi.fn(async () => ({ kind: 'ok' as const, status: 201, body: { token: 'download-token', expiresAt: '' } }));
+    const navigate = vi.fn();
+    await mount(expenses, CLIENT_ROUTES.expenses, false, { mint, navigate });
+    await screen.findByText('Kopitiam');
+    await userEvent.click(screen.getByRole('button', { name: 'Export expenses' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Download ZIP' }));
+    expect(mint).toHaveBeenCalledOnce();
+    expect(navigate).toHaveBeenCalledWith('/expenses/export.zip?token=download-token');
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    cleanup();
+    const failedMint = vi.fn(async () => ({ kind: 'error' as const, status: 500, message: 'nope' }));
+    await mount(expenses, CLIENT_ROUTES.expenses, false, { mint: failedMint });
+    await screen.findByText('Kopitiam');
+    await userEvent.click(screen.getByRole('button', { name: 'Export expenses' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Download ZIP' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not start the download. Please try again.');
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
   });
 });
