@@ -30,6 +30,11 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe('receipt inbox', () => {
+  it('positions capture above the safe-area-aware tab bar', async () => {
+    await mount({ '/receipts': { status: 200, body: [] } });
+    await screen.findByRole('navigation', { name: 'Main navigation' });
+    expect(document.querySelector('section.fixed')).toHaveClass('bottom-[calc(4rem+env(safe-area-inset-bottom))]');
+  });
   it('renders extracted data and the empty-safe date without Date parsing', async () => {
     await mount({ '/auth/login': { status: 200, body: session() }, '/receipts': { status: 200, body: [created] } });
     expect(await screen.findByText('Corner Cafe')).toBeInTheDocument();
