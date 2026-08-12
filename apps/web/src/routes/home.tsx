@@ -49,6 +49,7 @@ export function HomeScreen({ receiptsApi }: { receiptsApi?: ReceiptsApi } = {}) 
   const [deleting, setDeleting] = useState<Receipt>();
   const [deleteError, setDeleteError] = useState<string>();
   const input = useRef<HTMLInputElement>(null);
+  const returnNotice = (window.history.state as { usr?: { notice?: unknown } } | null)?.usr?.notice;
 
   useEffect(() => {
     let cancelled = false;
@@ -145,6 +146,7 @@ export function HomeScreen({ receiptsApi }: { receiptsApi?: ReceiptsApi } = {}) 
 
       <section className="py-5" aria-labelledby="inbox-heading">
         <h2 id="inbox-heading" className="mb-3 text-sm font-medium text-muted-foreground">Waiting to be filed</h2>
+        {typeof returnNotice === 'string' && <Alert className="mb-3"><AlertDescription>{returnNotice}</AlertDescription></Alert>}
         {listError && <Alert variant="destructive"><AlertDescription>{listError}</AlertDescription></Alert>}
         {loading ? <div className="grid gap-2" aria-label="Loading receipts">{[1,2,3].map((n) => <Skeleton key={n} className="h-20 w-full" />)}</div> : receipts.length === 0 ? (
           <div className="rounded-xl border border-dashed p-8 text-center text-sm text-muted-foreground dark:border-border"><ReceiptText className="mx-auto mb-3 size-6" aria-hidden="true" />No receipts waiting. Snap one to get started.</div>
@@ -170,7 +172,7 @@ export function HomeScreen({ receiptsApi }: { receiptsApi?: ReceiptsApi } = {}) 
 function ReceiptRow({ receipt, fresh, onDelete }: { receipt: Receipt; fresh: boolean; onDelete: () => void }) {
   const read = receipt.extraction && receipt.extraction.status !== 'failed' && receipt.extraction.status !== 'skipped';
   return <article className={cn('grid min-h-20 grid-cols-[minmax(0,1fr)_auto] items-center gap-3 rounded-xl border bg-card p-3 dark:border-border dark:bg-card', fresh && 'animate-[saved_600ms_ease-out] motion-reduce:animate-none')}>
-    <div className="min-w-0"><div className="flex min-w-0 items-center gap-2"><p className={cn('truncate font-medium', !read && 'text-muted-foreground')}>{read ? receipt.extraction!.merchantName ?? receipt.originalFilename ?? 'Receipt' : receipt.originalFilename ?? 'Receipt'}</p>{!read && <span className="shrink-0 rounded-md bg-muted px-2 py-0.5 text-xs text-muted-foreground dark:bg-muted/70">Needs details</span>}</div><p className="mt-1 truncate text-xs text-muted-foreground">{read && receipt.extraction!.purchasedOn ? formatPurchasedOn(receipt.extraction!.purchasedOn) + ' · ' : !read ? "Couldn't be read · " : ''}{formatCreatedAt(receipt.createdAt)}</p></div>
+    <a className="min-h-11 min-w-0 text-left" href={`/receipts/${receipt.id}/confirm`}><div className="flex min-w-0 items-center gap-2"><p className={cn('truncate font-medium', !read && 'text-muted-foreground')}>{read ? receipt.extraction!.merchantName ?? receipt.originalFilename ?? 'Receipt' : receipt.originalFilename ?? 'Receipt'}</p>{!read && <span className="shrink-0 rounded-md bg-muted px-2 py-0.5 text-xs text-muted-foreground dark:bg-muted/70">Needs details</span>}</div><p className="mt-1 truncate text-xs text-muted-foreground">{read && receipt.extraction!.purchasedOn ? formatPurchasedOn(receipt.extraction!.purchasedOn) + ' · ' : !read ? "Couldn't be read · " : ''}{formatCreatedAt(receipt.createdAt)}</p></a>
     <div className="flex items-center gap-2">{read && receipt.extraction!.totalCents !== null && <p className="min-w-24 text-right font-medium tabular-nums">{formatMoney(receipt.extraction!.totalCents, receipt.extraction!.currency)}</p>}<Button variant="ghost" size="icon" className="size-11" aria-label={`Delete ${receipt.originalFilename ?? 'receipt'}`} onClick={onDelete}><Trash2 aria-hidden="true" /></Button></div>
   </article>;
 }

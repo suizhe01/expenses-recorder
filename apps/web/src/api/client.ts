@@ -42,6 +42,7 @@ export type RequestOptions = {
   body?: unknown;
   /** Sent as `Authorization: Bearer …` when present. */
   accessToken?: string;
+  responseType?: 'json' | 'blob';
 };
 
 /**
@@ -80,7 +81,7 @@ export function createClient(baseUrl: string, transport: Transport) {
     path: string,
     options: RequestOptions = {},
   ): Promise<ApiResult<T>> {
-    const { method = 'GET', body, accessToken } = options;
+    const { method = 'GET', body, accessToken, responseType = 'json' } = options;
 
     const headers: Record<string, string> = { accept: 'application/json' };
 
@@ -113,6 +114,9 @@ export function createClient(baseUrl: string, transport: Transport) {
     }
 
     // 204 has no body by definition; logout relies on this.
+    if (response.ok && responseType === 'blob') {
+      return { kind: 'ok', status: response.status, body: await response.blob() as T };
+    }
     const raw = response.status === 204 ? '' : await response.text().catch(() => '');
     let parsed: unknown = undefined;
 
