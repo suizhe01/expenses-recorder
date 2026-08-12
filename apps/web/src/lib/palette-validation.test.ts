@@ -34,7 +34,13 @@ describe('categorical palette', () => {
   it('rejects a grey categorical hue instead of only checking the intended palette', async () => {
     const palette = await paletteFor(':root');
     palette.colors[2] = 'oklch(0.7 0 0)';
-    expect(validatePalette(palette)).toMatchObject({ chromaPasses: false, cvdPasses: false, passes: false });
+    expect(validatePalette(palette)).toMatchObject({ chromaPasses: false, passes: false });
+  });
+
+  it('rejects two chromatic slots that collapse under CVD simulation', async () => {
+    const palette = await paletteFor(':root');
+    palette.colors[2] = palette.colors[1]!;
+    expect(validatePalette(palette)).toMatchObject({ chromaPasses: true, cvdPasses: false, passes: false });
   });
 });
 

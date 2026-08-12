@@ -114,8 +114,7 @@ export function validatePalette({ surface, colors, other }: PaletteInput): Palet
   });
   const adjacent = colorRgb.slice(1).map((color, index) => [colorRgb[index]!, color] as const);
   const normalVisionPasses = adjacent.every(([first, second]) => deltaE(srgbToOklab(first), srgbToOklab(second)) >= MIN_NORMAL_DELTA_E);
-  // A neutral categorical slot cannot carry identity under any CVD simulation.
-  const cvdPasses = chromaPasses && (['deuteranope', 'protanope', 'tritanope'] as const).every((type) =>
+  const cvdPasses = (['deuteranope', 'protanope', 'tritanope'] as const).every((type) =>
     adjacent.every(([first, second]) => deltaE(srgbToOklab(simulateCvd(first, type)), srgbToOklab(simulateCvd(second, type))) >= MIN_CVD_DELTA_E),
   );
   return { passes: contrastPasses && chromaPasses && normalVisionPasses && cvdPasses, contrastPasses, chromaPasses, normalVisionPasses, cvdPasses };
