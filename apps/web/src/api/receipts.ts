@@ -1,4 +1,5 @@
 import type { ApiRequest, ApiResult } from './client';
+import type { ExpenseItem } from './expenses';
 
 export type Extraction = {
   status: string;
@@ -14,6 +15,7 @@ export type Extraction = {
   totalCents: number | null;
   currency: string | null;
   paymentMethod?: string | null;
+  items?: ExpenseItem[];
 };
 
 export type Receipt = {

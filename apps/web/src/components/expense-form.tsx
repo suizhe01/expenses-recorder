@@ -147,7 +147,7 @@ export function changedFields(initial: ExpenseFields, current: ExpenseFields, va
   return patch as ExpensePatch;
 }
 
-export function ExpenseForm({ fields, errors, categories, expanded, onToggleDetails, onChange, onSubmit, submitLabel, saving, canSubmit, footerExtra }: {
+export function ExpenseForm({ fields, errors, categories, expanded, onToggleDetails, onChange, onSubmit, submitLabel, saving, canSubmit, footerExtra, detailsExtra }: {
   fields: ExpenseFields;
   errors: Record<string, string>;
   categories: Category[];
@@ -159,6 +159,7 @@ export function ExpenseForm({ fields, errors, categories, expanded, onToggleDeta
   saving: boolean;
   canSubmit: boolean;
   footerExtra?: ReactNode;
+  detailsExtra?: ReactNode;
 }) {
   return <form onSubmit={onSubmit} className="grid gap-4">
     <Field label="Category" error={errors.categoryId}><select aria-label="Category" value={fields.categoryId} onChange={(event) => onChange('categoryId', event.target.value)} className="h-11 w-full rounded-lg border bg-background px-2.5 text-base"><option value="">Choose a category</option>{categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></Field>
@@ -166,7 +167,7 @@ export function ExpenseForm({ fields, errors, categories, expanded, onToggleDeta
     <Field label="Date" error={errors.purchasedOn}><Input aria-label="Date" type="date" max={todayInMalaysia()} value={fields.purchasedOn} onChange={(event) => onChange('purchasedOn', event.target.value)} /></Field>
     <Field label="Merchant" error={errors.merchantName}><Input aria-label="Merchant" value={fields.merchantName} onChange={(event) => onChange('merchantName', event.target.value)} /></Field>
     <Button type="button" variant="outline" className="h-11" onClick={onToggleDetails} aria-expanded={expanded}>More details</Button>
-    {expanded && <div className="grid gap-4 rounded-xl border p-4 dark:border-border">{COLLAPSED.map(({ label, name, type, money }) => <Field key={name} label={label} error={errors[API_KEY[name]]}><Input aria-label={label} type={type ?? 'text'} inputMode={money ? 'decimal' : undefined} value={fields[name]} onChange={(event) => onChange(name, event.target.value)} /></Field>)}</div>}
+    {expanded && <div className="grid gap-4 rounded-xl border p-4 dark:border-border">{COLLAPSED.map(({ label, name, type, money }) => <Field key={name} label={label} error={errors[API_KEY[name]]}><Input aria-label={label} type={type ?? 'text'} inputMode={money ? 'decimal' : undefined} value={fields[name]} onChange={(event) => onChange(name, event.target.value)} /></Field>)}{detailsExtra}</div>}
     <div className="fixed inset-x-0 bottom-0 border-t bg-background/95 px-4 pt-3 pb-[calc(.75rem+env(safe-area-inset-bottom))] dark:border-border"><div className="mx-auto flex w-full max-w-xl gap-2">{footerExtra}<Button className="h-12 flex-1" type="submit" disabled={!canSubmit || saving}>{saving ? 'Saving…' : submitLabel}</Button></div></div>
   </form>;
 }
