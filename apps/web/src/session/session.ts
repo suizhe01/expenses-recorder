@@ -163,6 +163,20 @@ export function createSessionManager({
     return refreshInFlight;
   }
 
+  async function callWithRefreshedToken<T>(
+    call: (token: string) => Promise<ApiResult<T>>,
+    token: string,
+  ): Promise<ApiResult<T>> {
+    const result = await call(token);
+
+    if (result.kind === 'error' && result.status === 401) {
+      await forget(SESSION_ENDED);
+      return { ...result, message: SESSION_ENDED };
+    }
+
+    return result;
+  }
+
   return {
     /**
      * Exposed so screens can make authenticated calls through `authorized`
@@ -225,7 +239,7 @@ export function createSessionManager({
           return { kind: 'error', status: 401, message: outcome.reason };
         }
 
-        return call(outcome.accessToken);
+        return callWithRefreshedToken(call, outcome.accessToken);
       }
 
       const first = await call(accessToken);
@@ -241,7 +255,7 @@ export function createSessionManager({
         return { kind: 'error', status: 401, message: outcome.reason };
       }
 
-      return call(outcome.accessToken);
+      return callWithRefreshedToken(call, outcome.accessToken);
     },
 
     async signIn(email: string, password: string): Promise<ApiResult<Session>> {

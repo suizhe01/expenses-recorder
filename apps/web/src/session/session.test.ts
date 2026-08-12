@@ -121,7 +121,7 @@ describe('401 handling (AC-6)', () => {
    * everything, a retry loop refreshes forever while the user watches a
    * spinner. One retry, then give up.
    */
-  it('does not retry a second time when the refreshed token is also rejected', async () => {
+  it('signs out without retrying again when the refreshed token is also rejected', async () => {
     const { manager, countOf, storage } = build({
       '/auth/login': { status: 200, body: session() },
       '/auth/refresh': { status: 200, body: session() },
@@ -134,8 +134,11 @@ describe('401 handling (AC-6)', () => {
     expect(result.kind).toBe('error');
     expect(countOf('/auth/me')).toBe(2);
     expect(countOf('/auth/refresh')).toBe(1);
-    // Still signed in: the session is fine, this endpoint just keeps refusing.
-    expect(storage.value).not.toBeNull();
+    expect(manager.getState()).toEqual({
+      status: 'signed-out',
+      reason: SESSION_ENDED,
+    });
+    expect(storage.value).toBeNull();
   });
 
   it('signs out with a message when the refresh itself fails', async () => {
