@@ -38,5 +38,9 @@ export default defineConfig({
     globals: true,
     setupFiles: ['./src/test/setup.ts'],
     css: false,
+    // Date-only strings are safe only while they stay strings. Pin the
+    // developers' positive-offset zone by default; CI overrides it with a
+    // negative offset to catch accidental `new Date('YYYY-MM-DD')` rendering.
+    env: { TZ: process.env.TZ ?? 'Asia/Kuala_Lumpur' },
   },
 });
