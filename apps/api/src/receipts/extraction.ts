@@ -12,11 +12,16 @@
  */
 
 /** AC-2. Every field is optional: a crumpled receipt may not show a tax number. */
-export type ExtractedItem = {
+export type ExtractedComponent = {
   description: string | null;
   quantity: string | null;
   unitPriceCents: number | null;
   lineTotalCents: number | null;
+};
+
+export type ExtractedItem = ExtractedComponent & {
+  /** Components are deliberately one level deep; see RESPONSE_SCHEMA. */
+  components: ExtractedComponent[];
 };
 
 export type ExtractedFields = {
@@ -149,6 +154,9 @@ const PROMPT = [
   '- rounding is the "rounding adjustment" line many Malaysian receipts carry to',
   '  reach the nearest 5 sen. It is negative when the total was rounded down.',
   '- merchantTaxId is the SST, GST, or tax registration number if one is shown.',
+  '- merchantName is the storefront, trading, or brand name shown most prominently',
+  '  near the top of the receipt. Use a registered legal company name only when it',
+  '  is the only merchant identity shown.',
   '- purchasedOn is the transaction date as YYYY-MM-DD. Malaysian receipts are',
   '  usually DD/MM/YYYY — read them that way, not as US month-first dates.',
   '- purchasedAtTime is 24-hour HH:MM:SS if a time is shown.',
@@ -157,6 +165,10 @@ const PROMPT = [
   '- Read line items from top to bottom. For each item, report description, quantity,',
   '  unitPrice, and lineTotal exactly as printed; do not recalculate amounts. Leave',
   '  any field the receipt does not show as null.',
+  '- When a priced set or combo has indented component lines, put those lines in the',
+  '  parent item\'s components array instead of making separate top-level items.',
+  '  An unpriced component has null unitPrice and lineTotal; preserve amounts for a',
+  '  component when the receipt prints them. Components never contain components.',
   '- Leave any field null when the receipt does not show it. A missing value is',
   '  always better than an invented one.',
 ].join('\n');
@@ -187,6 +199,18 @@ const RESPONSE_SCHEMA = {
           quantity: { type: 'STRING', nullable: true },
           unitPrice: { type: 'STRING', nullable: true },
           lineTotal: { type: 'STRING', nullable: true },
+          components: {
+            type: 'ARRAY',
+            items: {
+              type: 'OBJECT',
+              properties: {
+                description: { type: 'STRING', nullable: true },
+                quantity: { type: 'STRING', nullable: true },
+                unitPrice: { type: 'STRING', nullable: true },
+                lineTotal: { type: 'STRING', nullable: true },
+              },
+            },
+          },
         },
       },
     },
@@ -209,6 +233,21 @@ function text(value: unknown): string | null {
   return trimmed === '' ? null : trimmed;
 }
 
+function extractedComponents(value: unknown): ExtractedComponent[] {
+  if (!Array.isArray(value)) return [];
+
+  return value.slice(0, 50).flatMap((item) => {
+    if (item === null || typeof item !== 'object' || Array.isArray(item)) return [];
+    const row = item as Record<string, unknown>;
+    return [{
+      description: text(row.description),
+      quantity: text(row.quantity),
+      unitPriceCents: parseAmountToCents(row.unitPrice),
+      lineTotalCents: parseAmountToCents(row.lineTotal),
+    }];
+  });
+}
+
 function extractedItems(value: unknown): ExtractedItem[] {
   if (!Array.isArray(value)) return [];
 
@@ -220,6 +259,7 @@ function extractedItems(value: unknown): ExtractedItem[] {
       quantity: text(row.quantity),
       unitPriceCents: parseAmountToCents(row.unitPrice),
       lineTotalCents: parseAmountToCents(row.lineTotal),
+      components: extractedComponents(row.components),
     }];
   });
 }

@@ -185,23 +185,39 @@ describe('parsing amounts', () => {
 });
 
 describe('mapping the model output', () => {
-  it('EXP-40 AC-2: maps printed line items in order and caps them at 200', () => {
+  it('EXP-43 AC-2, AC-3, AC-4: maps one level of components in order and caps them', () => {
     const fields = toFields({
       isReceipt: true,
       items: [
-        { description: '  Nasi lemak ', quantity: ' 2 ', unitPrice: 'RM 4.50', lineTotal: '9.00' },
+        {
+          description: '  Nasi lemak set ', quantity: ' 2 ', unitPrice: 'RM 4.50', lineTotal: '9.00',
+          components: [
+            { description: ' Sambal ', quantity: ' ', unitPrice: null, lineTotal: null },
+            { description: 'Egg', quantity: '1', unitPrice: '0.50', lineTotal: '0.50', components: [{ description: 'ignored' }] },
+          ],
+        },
         { description: 'Tea', quantity: ' ', unitPrice: null, lineTotal: '1.20' },
       ],
     });
 
     expect(fields.items).toEqual([
-      { description: 'Nasi lemak', quantity: '2', unitPriceCents: 450, lineTotalCents: 900 },
-      { description: 'Tea', quantity: null, unitPriceCents: null, lineTotalCents: 120 },
+      {
+        description: 'Nasi lemak set', quantity: '2', unitPriceCents: 450, lineTotalCents: 900,
+        components: [
+          { description: 'Sambal', quantity: null, unitPriceCents: null, lineTotalCents: null },
+          { description: 'Egg', quantity: '1', unitPriceCents: 50, lineTotalCents: 50 },
+        ],
+      },
+      { description: 'Tea', quantity: null, unitPriceCents: null, lineTotalCents: 120, components: [] },
     ]);
     expect(toFields({ isReceipt: false, items: [{ description: 'discard' }] }).items).toEqual([]);
     expect(toFields({ isReceipt: null }).items).toEqual([]);
     expect(toFields({ isReceipt: true, items: Array.from({ length: 201 }, () => ({})) }).items)
       .toHaveLength(200);
+    expect(toFields({
+      isReceipt: true,
+      items: [{ components: Array.from({ length: 51 }, () => ({ description: 'part' })) }],
+    }).items[0]!.components).toHaveLength(50);
   });
   it('AC-13: an image that is not a receipt yields null fields', () => {
     const fields = toFields({
@@ -261,12 +277,15 @@ describe('POST /receipts with extraction', () => {
     expect(attempt!.cost_micros).toBeGreaterThan(0);
   });
 
-  it('EXP-40 AC-3, AC-4: keeps item snapshots and serialises all item fields', async () => {
+  it('EXP-43 AC-6, AC-7: persists nested components and serialises the allowlisted fields', async () => {
     app = await appWith(extractorReturning({
       ...succeeded,
       fields: {
         ...succeeded.fields,
-        items: [{ description: 'Rice', quantity: '1', unitPriceCents: 500, lineTotalCents: 500 }],
+        items: [{
+          description: 'Rice set', quantity: '1', unitPriceCents: 500, lineTotalCents: 500,
+          components: [{ description: 'Soup', quantity: null, unitPriceCents: null, lineTotalCents: null }],
+        }],
       },
     }));
     const token = await tokenFor(app, 'items@example.com');
@@ -274,7 +293,10 @@ describe('POST /receipts with extraction', () => {
     const body = response.json() as { id: string; extraction: { items: unknown[] } };
 
     expect(body.extraction.items).toEqual([
-      { description: 'Rice', quantity: '1', unitPriceCents: 500, lineTotalCents: 500 },
+      {
+        description: 'Rice set', quantity: '1', unitPriceCents: 500, lineTotalCents: 500,
+        components: [{ description: 'Soup', quantity: null, unitPriceCents: null, lineTotalCents: null }],
+      },
     ]);
     const { rows } = await database.pool.query<{ items: unknown }>(
       'SELECT items FROM receipt_extractions WHERE receipt_id = $1', [body.id],

@@ -109,6 +109,18 @@ const extractionResponse = {
           quantity: { type: ['string', 'null'] },
           unitPriceCents: { type: ['integer', 'null'] },
           lineTotalCents: { type: ['integer', 'null'] },
+          components: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                description: { type: ['string', 'null'] },
+                quantity: { type: ['string', 'null'] },
+                unitPriceCents: { type: ['integer', 'null'] },
+                lineTotalCents: { type: ['integer', 'null'] },
+              },
+            },
+          },
         },
       },
     },
