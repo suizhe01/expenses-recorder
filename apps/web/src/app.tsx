@@ -6,6 +6,7 @@ import { CheckEmailScreen } from '@/routes/check-email';
 import { HomeScreen } from '@/routes/home';
 import { ConfirmReceiptScreen } from '@/routes/confirm-receipt';
 import { ExpensesScreen } from '@/routes/expenses';
+import { ExpenseDetailScreen } from '@/routes/expense-detail';
 
 /**
  * The route table plus the signed-in/signed-out split.
@@ -40,6 +41,7 @@ export function Routing() {
         element={signedIn ? <Navigate to="/" replace /> : <SignInScreen />}
       />
       <Route path="/expenses" element={signedIn ? <ExpensesScreen /> : <Navigate to="/sign-in" replace />} />
+      <Route path="/expenses/:id" element={signedIn ? <ExpenseDetailScreen /> : <Navigate to="/sign-in" replace />} />
       <Route
         path="/sign-up"
         element={signedIn ? <Navigate to="/" replace /> : <SignUpScreen />}

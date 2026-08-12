@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Filter, Search, X } from 'lucide-react';
-import { useSearchParams } from 'react-router';
+import { useLocation, useSearchParams } from 'react-router';
 import { createClient } from '@/api/client';
 import { createExpensesApi, type Expense, type ExpenseFilters, type ExpensesApi } from '@/api/expenses';
 import { createCategoriesApi, type Category } from '@/api/categories';
@@ -36,7 +36,7 @@ function filtersFromSearch(search: URLSearchParams): ExpenseFilters {
 
 function filterCount(filters: ExpenseFilters): number { return Number(Boolean(filters.from)) + Number(Boolean(filters.to)) + (filters.categoryId?.length ?? 0) + Number(filters.hasReceipt !== undefined); }
 
-export function ExpensesScreen({ expensesApi, categoriesApi }: { expensesApi?: ExpensesApi; categoriesApi?: ReturnType<typeof createCategoriesApi> } = {}) {
+export function ExpensesScreen({ expensesApi, categoriesApi }: { expensesApi?: Pick<ExpensesApi, 'list'>; categoriesApi?: ReturnType<typeof createCategoriesApi> } = {}) {
   const { session } = useSession();
   const [searchParams, setSearchParams] = useSearchParams();
   const defaultExpenses = useMemo(() => createExpensesApi(createClient('', (url, init) => fetch(url, init))), []);
@@ -51,6 +51,8 @@ export function ExpensesScreen({ expensesApi, categoriesApi }: { expensesApi?: E
   const [error, setError] = useState<string>();
   const [deletedCategoryNotice, setDeletedCategoryNotice] = useState(false);
   const [search, setSearch] = useState('');
+  // EXP-31 AC-8, AC-10. What the detail screen said on its way back here.
+  const returnNotice = (useLocation().state as { notice?: unknown } | null)?.notice;
 
   useEffect(() => {
     let cancelled = false;
@@ -89,6 +91,7 @@ export function ExpensesScreen({ expensesApi, categoriesApi }: { expensesApi?: E
   return <main className="mx-auto min-h-dvh w-full max-w-xl overflow-x-hidden px-4 pb-[calc(5.5rem+env(safe-area-inset-bottom))]">
     <header className="border-b py-4 dark:border-border"><h1 className="font-heading text-lg font-semibold">Expenses</h1><p className="text-sm text-muted-foreground">Your filed expense archive</p></header>
     <div className="flex gap-2 py-4"><div className="relative min-w-0 flex-1"><Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" /><Input aria-label="Search expenses" value={search} onChange={(event) => setSearch(event.target.value)} className="pl-9" placeholder="Search merchant, note or receipt" /></div><Filters filters={filters} categories={categories} count={active} onApply={(next) => setSearchParams(toSearch(next))} /></div>
+    {typeof returnNotice === 'string' && <Alert className="mb-3"><AlertDescription>{returnNotice}</AlertDescription></Alert>}
     {error && <Alert variant="destructive" role="alert" className="mb-3"><AlertDescription>{error}</AlertDescription></Alert>}
     {deletedCategoryNotice && <Alert variant="destructive" role="alert" className="mb-3"><AlertDescription>That category was deleted</AlertDescription></Alert>}
     <p className="sr-only" aria-live="polite">{loading ? 'Loading expenses' : `${visible.length} ${visible.length === 1 ? 'expense' : 'expenses'} shown`}</p>
@@ -104,6 +107,7 @@ function Filters({ filters, categories, count, onApply }: { filters: ExpenseFilt
   return <Sheet onOpenChange={(open) => { if (open) setDraft(filters); }}><SheetTrigger asChild><Button variant="outline" className="h-11 shrink-0"><Filter aria-hidden="true" />Filters{count ? ` (${count})` : ''}</Button></SheetTrigger><SheetContent><SheetHeader><SheetTitle>Filter expenses</SheetTitle><SheetDescription>Filters update the archived expense list.</SheetDescription></SheetHeader><div className="grid gap-4"><label className="grid gap-1 text-sm font-medium">From<Input type="date" value={draft.from ?? ''} onChange={(event) => setDraft({ ...draft, from: event.target.value || undefined })} /></label><label className="grid gap-1 text-sm font-medium">To<Input type="date" value={draft.to ?? ''} onChange={(event) => setDraft({ ...draft, to: event.target.value || undefined })} /></label><fieldset><legend className="mb-2 text-sm font-medium">Categories</legend><div className="grid gap-2">{categories.map((category) => <label key={category.id} className="flex min-h-11 items-center gap-3 text-sm"><input type="checkbox" checked={draft.categoryId?.includes(category.id) ?? false} onChange={(event) => setDraft({ ...draft, categoryId: event.target.checked ? [...(draft.categoryId ?? []), category.id] : draft.categoryId?.filter((id) => id !== category.id) })} />{category.name}</label>)}</div></fieldset><fieldset><legend className="mb-2 text-sm font-medium">Receipt</legend><select aria-label="Receipt filter" className="h-11 w-full rounded-lg border bg-transparent px-2.5 text-base" value={draft.hasReceipt === undefined ? '' : String(draft.hasReceipt)} onChange={(event) => setDraft({ ...draft, hasReceipt: event.target.value === '' ? undefined : event.target.value === 'true' })}><option value="">Any receipt status</option><option value="true">Has receipt</option><option value="false">No receipt</option></select></fieldset></div><SheetFooter><Button variant="outline" onClick={() => { setDraft({}); onApply({}); }}>Clear all</Button><SheetClose asChild><Button onClick={() => onApply(draft)}>Apply filters</Button></SheetClose></SheetFooter></SheetContent></Sheet>;
 }
 
-function ExpenseRow({ expense }: { expense: Expense }) { return <article className="grid min-h-16 grid-cols-[minmax(0,1fr)_auto] items-center gap-3 border-b py-3 dark:border-border"><div className="min-w-0"><p className="truncate font-medium">{expense.merchantName ?? 'No merchant'}</p><p className="truncate text-sm text-muted-foreground">{expense.category.name} · {dayOfMonth(expense.purchasedOn)}</p></div><p className="text-right font-medium tabular-nums">{formatMoney(expense.totalCents, expense.currency)}</p></article>; }
+// EXP-31 AC-1. The whole row is the link, matching the inbox row's anatomy.
+function ExpenseRow({ expense }: { expense: Expense }) { return <article className="border-b dark:border-border"><a href={`/expenses/${expense.id}`} className="grid min-h-16 grid-cols-[minmax(0,1fr)_auto] items-center gap-3 py-3"><div className="min-w-0"><p className="truncate font-medium">{expense.merchantName ?? 'No merchant'}</p><p className="truncate text-sm text-muted-foreground">{expense.category.name} · {dayOfMonth(expense.purchasedOn)}</p></div><p className="text-right font-medium tabular-nums">{formatMoney(expense.totalCents, expense.currency)}</p></a></article>; }
 function ExpenseSkeletons() { return <div className="grid gap-2" aria-label="Loading expenses">{[1, 2, 3, 4].map((n) => <div key={n} className="grid min-h-16 grid-cols-[1fr_auto] items-center gap-3 border-b py-3 dark:border-border"><div className="grid gap-2"><Skeleton className="h-4 w-36" /><Skeleton className="h-3 w-20" /></div><Skeleton className="h-4 w-16" /></div>)}</div>; }
 function Empty({ title, clear }: { title: string; clear?: () => void }) { return <div className="rounded-xl border border-dashed p-8 text-center dark:border-border"><p className="font-medium">{title}</p>{clear && <Button variant="link" className="mt-2" onClick={clear}><X aria-hidden="true" />Clear all</Button>}</div>; }

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 import { createAuthApi } from '@/api/auth';
@@ -9,13 +9,15 @@ import { SessionProvider } from '@/session/context';
 import { createSessionManager } from '@/session/session';
 import { fakeStorage, session } from '@/test/support';
 
+const blank = { purchasedAtTime: null, subtotalCents: null, taxCents: null, roundingCents: null, merchantTaxId: null, paymentMethod: null, createdAt: '2026-08-11T00:00:00.000Z', updatedAt: '2026-08-11T00:00:00.000Z' };
+
 const expenses: Expense[] = [
-  { id: 'one', category: { id: 'cat-1', name: 'Food' }, receiptId: null, totalCents: 1200, purchasedOn: '2026-08-01', currency: 'MYR', merchantName: 'Kopitiam', receiptNumber: 'R-1', note: 'Breakfast' },
-  { id: 'two', category: { id: 'cat-1', name: 'Food' }, receiptId: 'receipt-1', totalCents: 750, purchasedOn: '2026-08-01', currency: 'SGD', merchantName: 'Market', receiptNumber: null, note: null },
-  { id: 'three', category: { id: 'cat-2', name: 'Travel' }, receiptId: null, totalCents: 3000, purchasedOn: '2026-07-31', currency: 'MYR', merchantName: null, receiptNumber: null, note: 'Train' },
+  { id: 'one', category: { id: 'cat-1', name: 'Food' }, receiptId: null, totalCents: 1200, purchasedOn: '2026-08-01', currency: 'MYR', merchantName: 'Kopitiam', receiptNumber: 'R-1', note: 'Breakfast', ...blank },
+  { id: 'two', category: { id: 'cat-1', name: 'Food' }, receiptId: 'receipt-1', totalCents: 750, purchasedOn: '2026-08-01', currency: 'SGD', merchantName: 'Market', receiptNumber: null, note: null, ...blank },
+  { id: 'three', category: { id: 'cat-2', name: 'Travel' }, receiptId: null, totalCents: 3000, purchasedOn: '2026-07-31', currency: 'MYR', merchantName: null, receiptNumber: null, note: 'Train', ...blank },
 ];
 
-async function mount(rows: Expense[] = expenses, initialPath = '/expenses', deletedCategory = false) {
+async function mount(rows: Expense[] = expenses, initialPath: string | { pathname: string; state: unknown } = '/expenses', deletedCategory = false) {
   const calls: string[] = [];
   const api = { create: vi.fn(), list: vi.fn(async (_token: string, filters) => { calls.push(expenseQuery(filters)); return deletedCategory && filters.categoryId?.length ? { kind: 'error' as const, status: 422, message: 'Category not found' } : { kind: 'ok' as const, status: 200, body: rows }; }) };
   const categoriesApi = { list: vi.fn(async () => ({ kind: 'ok' as const, status: 200, body: [{ id: 'cat-1', name: 'Food', createdAt: '', updatedAt: '' }] })) };
@@ -60,6 +62,14 @@ describe('expense list', () => {
     await waitFor(() => expect(calls).toEqual(['', '?from=2026-08-01']));
     expect(screen.getByRole('navigation', { name: 'Main navigation' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /expenses/i })).toHaveAttribute('aria-current', 'page');
+  });
+
+  it('opens the detail screen from a row and shows what the detail screen sent back', async () => {
+    await mount();
+    expect(await screen.findByRole('link', { name: /Kopitiam/ })).toHaveAttribute('href', '/expenses/one');
+    cleanup();
+    await mount(expenses, { pathname: '/expenses', state: { notice: 'Expense not found' } });
+    expect(await screen.findByText('Expense not found')).toBeInTheDocument();
   });
 
   it('shows nothing-filed rather than a filtered empty state for an empty archive', async () => {
