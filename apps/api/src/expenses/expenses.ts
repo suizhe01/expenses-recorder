@@ -22,9 +22,17 @@ export type ExpenseRow = {
   receipt_number: string | null;
   payment_method: string | null;
   note: string | null;
+  items: ExpenseItem[];
   created_at: Date;
   updated_at: Date;
   deleted_at: Date | null;
+};
+
+export type ExpenseItem = {
+  description?: string | null;
+  quantity?: string | null;
+  unitPriceCents?: number | null;
+  lineTotalCents?: number | null;
 };
 
 /** AC-11. Ids plus the category's name, so a list renders without a second call. */
@@ -44,6 +52,7 @@ export type Expense = {
   receiptNumber: string | null;
   paymentMethod: string | null;
   note: string | null;
+  items: ExpenseItem[];
   createdAt: string;
   updatedAt: string;
 };
@@ -65,6 +74,7 @@ export function toExpense(row: ExpenseRow): Expense {
     receiptNumber: row.receipt_number,
     paymentMethod: row.payment_method,
     note: row.note,
+    items: row.items,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
   };
@@ -89,7 +99,7 @@ const PROJECTION = `e.id, e.user_id, e.category_id, c.name AS category_name,
   e.receipt_id, to_char(e.purchased_on, 'YYYY-MM-DD') AS purchased_on,
   e.purchased_at_time, e.total_cents, e.subtotal_cents, e.tax_cents,
   e.rounding_cents, e.currency, e.merchant_name, e.merchant_tax_id,
-  e.receipt_number, e.payment_method, e.note, e.created_at, e.updated_at,
+  e.receipt_number, e.payment_method, e.note, e.items, e.created_at, e.updated_at,
   e.deleted_at`;
 
 const FROM_EXPENSES = `FROM expenses e JOIN categories c ON c.id = e.category_id`;
@@ -114,12 +124,13 @@ const COLUMN_FOR = {
   receiptNumber: 'receipt_number',
   paymentMethod: 'payment_method',
   note: 'note',
+  items: 'items',
 } as const;
 
 export type ExpenseField = keyof typeof COLUMN_FOR;
 
 /** A partial set of fields to write. Absent keys are left alone (AC-14). */
-export type ExpenseInput = Partial<Record<ExpenseField, string | number | null>>;
+export type ExpenseInput = Partial<Record<ExpenseField, string | number | ExpenseItem[] | null>>;
 
 /** AC-4. The three the route guarantees; the rest are optional. */
 export type CreateExpenseValues = ExpenseInput & {
@@ -128,7 +139,7 @@ export type CreateExpenseValues = ExpenseInput & {
   purchasedOn: string;
 };
 
-type Entry = [ExpenseField, string | number | null];
+type Entry = [ExpenseField, string | number | ExpenseItem[] | null];
 
 /**
  * `undefined` means "not mentioned" and must never reach SQL as a value — pg
@@ -327,13 +338,17 @@ export async function insertExpense(
 ): Promise<InsertExpenseOutcome> {
   const entries = entriesOf(values);
   const columns = ['user_id', ...entries.map(([field]) => COLUMN_FOR[field])];
-  const parameters = [userId, ...entries.map(([, value]) => value)];
+  const parameters = [userId, ...entries.map(([field, value]) => field === 'items' ? JSON.stringify(value) : value)];
+  const placeholders = parameters.map((_, index) => {
+    const field = entries[index - 1]?.[0];
+    return field === 'items' ? `$${index + 1}::jsonb` : `$${index + 1}`;
+  });
 
   try {
     const { rows } = await executor.query<ExpenseRow>(
       `WITH inserted AS (
          INSERT INTO expenses (${columns.join(', ')})
-         VALUES (${parameters.map((_, index) => `$${index + 1}`).join(', ')})
+         VALUES (${placeholders.join(', ')})
          RETURNING *
        )
        SELECT ${PROJECTION} FROM inserted e JOIN categories c ON c.id = e.category_id`,
@@ -369,9 +384,9 @@ export async function updateExpense(
 ): Promise<UpdateExpenseOutcome> {
   const entries = entriesOf(patch);
   const assignments = entries.map(
-    ([field], index) => `${COLUMN_FOR[field]} = $${index + 3}`,
+    ([field], index) => `${COLUMN_FOR[field]} = $${index + 3}${field === 'items' ? '::jsonb' : ''}`,
   );
-  const parameters = [id, userId, ...entries.map(([, value]) => value)];
+  const parameters = [id, userId, ...entries.map(([field, value]) => field === 'items' ? JSON.stringify(value) : value)];
 
   try {
     const { rows } = await executor.query<ExpenseRow>(

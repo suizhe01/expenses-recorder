@@ -28,7 +28,15 @@ export type ExtractionRow = {
   total_cents: number | null;
   currency: string | null;
   payment_method: string | null;
+  items: ExtractionItem[];
   created_at: Date;
+};
+
+export type ExtractionItem = {
+  description: string | null;
+  quantity: string | null;
+  unitPriceCents: number | null;
+  lineTotalCents: number | null;
 };
 
 /**
@@ -53,6 +61,7 @@ export type Extraction = {
   totalCents: number | null;
   currency: string | null;
   paymentMethod: string | null;
+  items: ExtractionItem[];
   extractedAt: string;
 };
 
@@ -73,6 +82,7 @@ export function toExtraction(row: ExtractionRow): Extraction {
     totalCents: row.total_cents,
     currency: row.currency,
     paymentMethod: row.payment_method,
+    items: row.items,
     extractedAt: row.created_at.toISOString(),
   };
 }
@@ -95,7 +105,7 @@ const PUBLIC_COLUMNS = `id, receipt_id, status, model, is_receipt, confidence,
   merchant_name, merchant_tax_id, receipt_number,
   to_char(purchased_on, 'YYYY-MM-DD') AS purchased_on,
   purchased_at_time, subtotal_cents, tax_cents, rounding_cents, total_cents,
-  currency, payment_method, created_at`;
+  currency, payment_method, items, created_at`;
 
 /**
  * AC-10. Inserts an attempt. Never updates: a re-run adds a row, so the first
@@ -116,10 +126,10 @@ export async function recordExtraction(
        receipt_id, status, model, prompt_tokens, output_tokens, cost_micros,
        error, is_receipt, confidence, merchant_name, merchant_tax_id,
        receipt_number, purchased_on, purchased_at_time, subtotal_cents,
-       tax_cents, rounding_cents, total_cents, currency, payment_method
+       tax_cents, rounding_cents, total_cents, currency, payment_method, items
      )
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
-             $16, $17, $18, $19, $20)
+             $16, $17, $18, $19, $20, $21::jsonb)
      RETURNING ${PUBLIC_COLUMNS}`,
     [
       receiptId,
@@ -142,6 +152,7 @@ export async function recordExtraction(
       fields?.totalCents ?? null,
       fields?.currency ?? null,
       fields?.paymentMethod ?? null,
+      JSON.stringify(fields?.items ?? []),
     ],
   );
 

@@ -45,6 +45,7 @@ const succeeded: ExtractionResult = {
     totalCents: 1270,
     currency: 'MYR',
     paymentMethod: 'CASH',
+    items: [],
   },
   promptTokens: 1180,
   outputTokens: 84,
@@ -184,6 +185,24 @@ describe('parsing amounts', () => {
 });
 
 describe('mapping the model output', () => {
+  it('EXP-40 AC-2: maps printed line items in order and caps them at 200', () => {
+    const fields = toFields({
+      isReceipt: true,
+      items: [
+        { description: '  Nasi lemak ', quantity: ' 2 ', unitPrice: 'RM 4.50', lineTotal: '9.00' },
+        { description: 'Tea', quantity: ' ', unitPrice: null, lineTotal: '1.20' },
+      ],
+    });
+
+    expect(fields.items).toEqual([
+      { description: 'Nasi lemak', quantity: '2', unitPriceCents: 450, lineTotalCents: 900 },
+      { description: 'Tea', quantity: null, unitPriceCents: null, lineTotalCents: 120 },
+    ]);
+    expect(toFields({ isReceipt: false, items: [{ description: 'discard' }] }).items).toEqual([]);
+    expect(toFields({ isReceipt: null }).items).toEqual([]);
+    expect(toFields({ isReceipt: true, items: Array.from({ length: 201 }, () => ({})) }).items)
+      .toHaveLength(200);
+  });
   it('AC-13: an image that is not a receipt yields null fields', () => {
     const fields = toFields({
       isReceipt: false,
@@ -240,6 +259,27 @@ describe('POST /receipts with extraction', () => {
     expect(attempt).toMatchObject({ status: 'succeeded', model: 'fake-model' });
     expect(attempt!.prompt_tokens).toBe(1180);
     expect(attempt!.cost_micros).toBeGreaterThan(0);
+  });
+
+  it('EXP-40 AC-3, AC-4: keeps item snapshots and serialises all item fields', async () => {
+    app = await appWith(extractorReturning({
+      ...succeeded,
+      fields: {
+        ...succeeded.fields,
+        items: [{ description: 'Rice', quantity: '1', unitPriceCents: 500, lineTotalCents: 500 }],
+      },
+    }));
+    const token = await tokenFor(app, 'items@example.com');
+    const response = await upload(app, token, jpeg());
+    const body = response.json() as { id: string; extraction: { items: unknown[] } };
+
+    expect(body.extraction.items).toEqual([
+      { description: 'Rice', quantity: '1', unitPriceCents: 500, lineTotalCents: 500 },
+    ]);
+    const { rows } = await database.pool.query<{ items: unknown }>(
+      'SELECT items FROM receipt_extractions WHERE receipt_id = $1', [body.id],
+    );
+    expect(rows[0]!.items).toEqual(body.extraction.items);
   });
 
   it('AC-9: the list carries the newest reading and no cost', async () => {

@@ -12,6 +12,13 @@
  */
 
 /** AC-2. Every field is optional: a crumpled receipt may not show a tax number. */
+export type ExtractedItem = {
+  description: string | null;
+  quantity: string | null;
+  unitPriceCents: number | null;
+  lineTotalCents: number | null;
+};
+
 export type ExtractedFields = {
   isReceipt: boolean | null;
   confidence: number | null;
@@ -26,6 +33,7 @@ export type ExtractedFields = {
   totalCents: number | null;
   currency: string | null;
   paymentMethod: string | null;
+  items: ExtractedItem[];
 };
 
 export type ExtractionResult =
@@ -146,6 +154,9 @@ const PROMPT = [
   '- purchasedAtTime is 24-hour HH:MM:SS if a time is shown.',
   '- currency is the ISO code, MYR unless the receipt clearly says otherwise.',
   '- confidence is your overall confidence in this reading, 0 to 1.',
+  '- Read line items from top to bottom. For each item, report description, quantity,',
+  '  unitPrice, and lineTotal exactly as printed; do not recalculate amounts. Leave',
+  '  any field the receipt does not show as null.',
   '- Leave any field null when the receipt does not show it. A missing value is',
   '  always better than an invented one.',
 ].join('\n');
@@ -167,6 +178,18 @@ const RESPONSE_SCHEMA = {
     total: { type: 'STRING', nullable: true },
     currency: { type: 'STRING', nullable: true },
     paymentMethod: { type: 'STRING', nullable: true },
+    items: {
+      type: 'ARRAY',
+      items: {
+        type: 'OBJECT',
+        properties: {
+          description: { type: 'STRING', nullable: true },
+          quantity: { type: 'STRING', nullable: true },
+          unitPrice: { type: 'STRING', nullable: true },
+          lineTotal: { type: 'STRING', nullable: true },
+        },
+      },
+    },
   },
   required: ['isReceipt'],
 } as const;
@@ -184,6 +207,21 @@ function text(value: unknown): string | null {
   const trimmed = value.trim();
 
   return trimmed === '' ? null : trimmed;
+}
+
+function extractedItems(value: unknown): ExtractedItem[] {
+  if (!Array.isArray(value)) return [];
+
+  return value.slice(0, 200).flatMap((item) => {
+    if (item === null || typeof item !== 'object' || Array.isArray(item)) return [];
+    const row = item as Record<string, unknown>;
+    return [{
+      description: text(row.description),
+      quantity: text(row.quantity),
+      unitPriceCents: parseAmountToCents(row.unitPrice),
+      lineTotalCents: parseAmountToCents(row.lineTotal),
+    }];
+  });
 }
 
 /** Maps the model's JSON onto AC-2's fields, converting amounts to cents. */
@@ -209,6 +247,7 @@ export function toFields(payload: Record<string, unknown>): ExtractedFields {
       totalCents: null,
       currency: null,
       paymentMethod: null,
+      items: [],
     };
   }
 
@@ -226,6 +265,9 @@ export function toFields(payload: Record<string, unknown>): ExtractedFields {
     totalCents: parseAmountToCents(payload.total),
     currency: text(payload.currency)?.toUpperCase() ?? null,
     paymentMethod: text(payload.paymentMethod),
+    // A missing receipt verdict is not evidence that any accompanying rows are
+    // real. Keep the same safe empty-array rule as an explicit false verdict.
+    items: isReceipt === true ? extractedItems(payload.items) : [],
   };
 }
 

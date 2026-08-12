@@ -213,6 +213,12 @@ type Expense = {
   receiptNumber: string | null;
   paymentMethod: string | null;
   note: string | null;
+  items: {
+    description: string | null;
+    quantity: string | null;
+    unitPriceCents: number | null;
+    lineTotalCents: number | null;
+  }[];
   createdAt: string;
   updatedAt: string;
 };
@@ -299,6 +305,40 @@ describe('schema', () => {
 });
 
 describe('POST /expenses', () => {
+  it('EXP-40 AC-5, AC-7: stores item rows, trims text, and drops empty rows', async () => {
+    const { token } = await account('item-create@example.com');
+    const expense = await anExpense(token, {
+      items: [
+        { description: '  Roti canai ', quantity: ' 2 ', unitPriceCents: 150, lineTotalCents: 300 },
+        { description: ' ', quantity: '', unitPriceCents: null, lineTotalCents: null },
+      ],
+    });
+
+    expect(expense.items).toEqual([
+      { description: 'Roti canai', quantity: '2', unitPriceCents: 150, lineTotalCents: 300 },
+    ]);
+    expect((await fetchOne(token, expense.id)).json()).toMatchObject({ items: expense.items });
+    expect((await list(token)).json()).toMatchObject([{ items: expense.items }]);
+
+    const { rows } = await database.pool.query<{ items: unknown }>(
+      'SELECT items FROM expenses WHERE id = $1', [expense.id],
+    );
+    expect(rows[0]!.items).toEqual(expense.items);
+  });
+
+  it('EXP-40 AC-7: rejects malformed item fields by name', async () => {
+    const { token } = await account('item-invalid@example.com');
+    for (const [field, value] of [
+      ['description', 'x'.repeat(501)],
+      ['quantity', 'x'.repeat(51)],
+      ['unitPriceCents', -1],
+      ['lineTotalCents', 1.5],
+    ] as const) {
+      const response = await create(token, await minimal(token, { items: [{ [field]: value }] }));
+      expect(response.statusCode).toBe(400);
+      expect(fields(response)).toHaveProperty(`items.0.${field}`);
+    }
+  });
   it('AC-4: records an expense from the three required fields', async () => {
     const { token } = await account('create@example.com');
 
@@ -1168,6 +1208,20 @@ describe('GET /expenses/:id', () => {
 });
 
 describe('PATCH /expenses/:id', () => {
+  it('EXP-40 AC-6: replaces or clears items, while absence preserves them', async () => {
+    const { token } = await account('item-patch@example.com');
+    const created = await anExpense(token, {
+      items: [{ description: 'Old', quantity: null, unitPriceCents: null, lineTotalCents: 100 }],
+    });
+    const replaced = await patch(token, created.id, {
+      items: [{ description: 'New', quantity: '2', unitPriceCents: 200, lineTotalCents: 400 }],
+    });
+    expect((replaced.json() as Expense).items).toHaveLength(1);
+    expect((await patch(token, created.id, { note: 'unchanged items' })).json()).toMatchObject({
+      items: [{ description: 'New' }],
+    });
+    expect((await patch(token, created.id, { items: [] })).json()).toMatchObject({ items: [] });
+  });
   it('AC-14: changes only the field it was given', async () => {
     const { token } = await account('patch@example.com');
     const before = await anExpense(token, {
