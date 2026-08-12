@@ -7,6 +7,7 @@ import { OverviewScreen } from '@/routes/overview';
 import { ConfirmReceiptScreen } from '@/routes/confirm-receipt';
 import { ExpensesScreen } from '@/routes/expenses';
 import { CLIENT_ROUTES } from '@/client-routes';
+import { ExpenseDetailScreen } from '@/routes/expense-detail';
 
 /**
  * The route table plus the signed-in/signed-out split.
@@ -41,6 +42,8 @@ export function Routing() {
         element={signedIn ? <Navigate to={CLIENT_ROUTES.home} replace /> : <SignInScreen />}
       />
       <Route path={CLIENT_ROUTES.expenses} element={signedIn ? <ExpensesScreen /> : <Navigate to={CLIENT_ROUTES.signIn} replace />} />
+      <Route path={CLIENT_ROUTES.expenses} element={signedIn ? <ExpensesScreen /> : <Navigate to={CLIENT_ROUTES.signIn} replace />} />
+      <Route path={CLIENT_ROUTES.expenseDetail} element={signedIn ? <ExpenseDetailScreen /> : <Navigate to={CLIENT_ROUTES.signIn} replace />} />
       <Route
         path={CLIENT_ROUTES.signUp}
         element={signedIn ? <Navigate to={CLIENT_ROUTES.home} replace /> : <SignUpScreen />}
