@@ -5,6 +5,14 @@ export type ExpenseValues = {
   purchasedAtTime?: string | null; subtotalCents?: number | null; taxCents?: number | null;
   roundingCents?: number | null; currency?: string; merchantName?: string | null;
   merchantTaxId?: string | null; receiptNumber?: string | null; paymentMethod?: string | null; note?: string | null;
+  items?: ExpenseItem[];
+};
+
+export type ExpenseItem = {
+  description: string | null;
+  quantity: string | null;
+  unitPriceCents: number | null;
+  lineTotalCents: number | null;
 };
 
 export type ExpenseInput = ExpenseValues & { receiptId?: string | null };
@@ -27,6 +35,7 @@ export type Expense = {
   subtotalCents: number | null; taxCents: number | null; roundingCents: number | null;
   currency: string; merchantName: string | null; merchantTaxId: string | null;
   receiptNumber: string | null; paymentMethod: string | null; note: string | null;
+  items?: ExpenseItem[];
   createdAt: string; updatedAt: string;
 };
 
