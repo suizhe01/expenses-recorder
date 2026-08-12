@@ -1,4 +1,5 @@
 import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { createAuthApi } from '@/api/auth';
 import { createClient } from '@/api/client';
@@ -41,5 +42,17 @@ describe('overview', () => {
     expect(await screen.findByText('Nothing filed yet')).toBeInTheDocument();
     expect(screen.getByText('Use the + button to capture your first receipt.')).toBeInTheDocument();
     expect(screen.queryByText(/to file$/)).not.toBeInTheDocument();
+  });
+  it('keeps an offline FAB upload available for retry without reopening the picker', async () => {
+    const uploaded = { ...receipt, extraction: { status: 'succeeded', merchantName: 'Cafe', purchasedOn: '2026-08-01', totalCents: 500, currency: 'MYR' } };
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValueOnce(new TypeError('offline')).mockResolvedValueOnce(new Response(JSON.stringify(uploaded), { status: 201, headers: { 'content-type': 'application/json' } })));
+    await mount();
+    await screen.findByText('RM 20.00');
+    await userEvent.upload(screen.getByLabelText('Add receipt'), new File(['jpeg'], 'retry.jpg', { type: 'image/jpeg' }));
+    expect(await screen.findByText('Could not reach the server. Check your connection.')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('Saved')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Discard' })).not.toBeInTheDocument();
+    vi.unstubAllGlobals();
   });
 });
