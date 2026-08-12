@@ -49,6 +49,7 @@ export function ExpensesScreen({ expensesApi, categoriesApi }: { expensesApi?: E
   const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string>();
+  const [deletedCategoryNotice, setDeletedCategoryNotice] = useState(false);
   const [search, setSearch] = useState('');
 
   useEffect(() => {
@@ -60,7 +61,7 @@ export function ExpensesScreen({ expensesApi, categoriesApi }: { expensesApi?: E
     void session.authorized((token) => api.list(token, filters)).then((result) => {
       if (cancelled) return;
       if (result.kind === 'ok') setExpenses(result.body);
-      else if (result.kind === 'error' && result.status === 422 && filters.categoryId?.length) { setError('That category was deleted'); setSearchParams({}, { replace: true }); }
+      else if (result.kind === 'error' && result.status === 422 && filters.categoryId?.length) { setDeletedCategoryNotice(true); setSearchParams({}, { replace: true }); }
       else if (!(result.kind === 'error' && result.status === 401)) setError(describeFailure(result));
       setLoading(false);
     });
@@ -80,6 +81,7 @@ export function ExpensesScreen({ expensesApi, categoriesApi }: { expensesApi?: E
     <header className="border-b py-4 dark:border-border"><h1 className="font-heading text-lg font-semibold">Expenses</h1><p className="text-sm text-muted-foreground">Your filed expense archive</p></header>
     <div className="flex gap-2 py-4"><div className="relative min-w-0 flex-1"><Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" /><Input aria-label="Search expenses" value={search} onChange={(event) => setSearch(event.target.value)} className="pl-9" placeholder="Search merchant, note or receipt" /></div><Filters filters={filters} categories={categories} count={active} onApply={(next) => setSearchParams(toSearch(next))} /></div>
     {error && <Alert variant="destructive" role="alert" className="mb-3"><AlertDescription>{error}</AlertDescription></Alert>}
+    {deletedCategoryNotice && <Alert variant="destructive" role="alert" className="mb-3"><AlertDescription>That category was deleted</AlertDescription></Alert>}
     <p className="sr-only" aria-live="polite">{loading ? 'Loading expenses' : `${visible.length} ${visible.length === 1 ? 'expense' : 'expenses'} shown`}</p>
     {loading ? <ExpenseSkeletons /> : expenses.length === 0 && !filtered ? <Empty title="Nothing filed yet" /> : visible.length === 0 ? <Empty title="No expenses match" clear={clearAll} /> : <div className="grid gap-5">{groupExpenses(visible).map((group) => <section key={group.month}><header className="sticky top-0 z-10 -mx-4 flex items-start justify-between border-y bg-background/95 px-4 py-2 backdrop-blur dark:border-border"><h2 className="font-medium">{monthLabel(group.month)}</h2><div className="text-right font-medium tabular-nums">{[...group.totals.entries()].map(([currency, cents]) => <p key={currency}>{formatMoney(cents, currency)}</p>)}</div></header><div>{group.expenses.map((expense) => <ExpenseRow key={expense.id} expense={expense} />)}</div></section>)}</div>}
     <TabBar active="expenses" />

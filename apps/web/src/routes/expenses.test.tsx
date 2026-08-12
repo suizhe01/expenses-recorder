@@ -15,13 +15,13 @@ const expenses: Expense[] = [
   { id: 'three', category: { id: 'cat-2', name: 'Travel' }, receiptId: null, totalCents: 3000, purchasedOn: '2026-07-31', currency: 'MYR', merchantName: null, receiptNumber: null, note: 'Train' },
 ];
 
-async function mount(rows: Expense[] = expenses) {
+async function mount(rows: Expense[] = expenses, initialPath = '/expenses', deletedCategory = false) {
   const calls: string[] = [];
-  const api = { create: vi.fn(), list: vi.fn(async (_token: string, filters) => { calls.push(expenseQuery(filters)); return { kind: 'ok' as const, status: 200, body: rows }; }) };
+  const api = { create: vi.fn(), list: vi.fn(async (_token: string, filters) => { calls.push(expenseQuery(filters)); return deletedCategory && filters.categoryId?.length ? { kind: 'error' as const, status: 422, message: 'Category not found' } : { kind: 'ok' as const, status: 200, body: rows }; }) };
   const categoriesApi = { list: vi.fn(async () => ({ kind: 'ok' as const, status: 200, body: [{ id: 'cat-1', name: 'Food', createdAt: '', updatedAt: '' }] })) };
   const manager = createSessionManager({ auth: createAuthApi(createClient('', async () => new Response(JSON.stringify(session()), { status: 200 }))), storage: fakeStorage() });
   await manager.signIn('someone@example.com', 'password');
-  render(<SessionProvider manager={manager}><MemoryRouter initialEntries={['/expenses']}><ExpensesScreen expensesApi={api} categoriesApi={categoriesApi} /></MemoryRouter></SessionProvider>);
+  render(<SessionProvider manager={manager}><MemoryRouter initialEntries={[initialPath]}><ExpensesScreen expensesApi={api} categoriesApi={categoriesApi} /></MemoryRouter></SessionProvider>);
   return { calls, api };
 }
 
@@ -71,5 +71,12 @@ describe('expense list', () => {
     await mount();
     await screen.findByText('Kopitiam');
     expect(screen.getByRole('main')).toHaveClass('pb-[calc(5.5rem+env(safe-area-inset-bottom))]');
+  });
+
+  it('keeps the deleted-category message visible while clearing the invalid URL filter', async () => {
+    const { calls } = await mount(expenses, '/expenses?categoryId=cat-deleted', true);
+    expect(await screen.findByText('That category was deleted')).toBeInTheDocument();
+    await waitFor(() => expect(calls).toEqual(['?categoryId=cat-deleted', '']));
+    expect(screen.getByText('That category was deleted')).toBeInTheDocument();
   });
 });
