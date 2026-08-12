@@ -19,6 +19,7 @@ export const CLIENT_ROUTES = {
   checkEmail: '/check-email',
   home: '/',
   expenses: '/expense',
+  expenseDetail: '/expense/:expenseId',
   confirmReceipt: '/confirm/:receiptId',
   catchAll: '*',
 } as const;
@@ -27,4 +28,8 @@ export const CLIENT_ROUTES = {
  *  exactly one place alongside its route pattern. */
 export function confirmReceiptPath(receiptId: string): string {
   return `/confirm/${receiptId}`;
+}
+
+export function expenseDetailPath(expenseId: string): string {
+  return `/expense/${expenseId}`;
 }

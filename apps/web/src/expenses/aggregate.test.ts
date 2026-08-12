@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import type { Expense } from "@/api/expenses";
 import { donutSlices, overviewFor, previousMonth } from "./aggregate";
 
+const blank = { purchasedAtTime: null, subtotalCents: null, taxCents: null, roundingCents: null, merchantTaxId: null, paymentMethod: null, createdAt: "", updatedAt: "" };
+
 const rows: Expense[] = [
   {
     id: "1",
@@ -13,6 +15,7 @@ const rows: Expense[] = [
     merchantName: null,
     receiptNumber: null,
     note: null,
+    ...blank,
   },
   {
     id: "2",
@@ -24,6 +27,7 @@ const rows: Expense[] = [
     merchantName: null,
     receiptNumber: null,
     note: null,
+    ...blank,
   },
   {
     id: "3",
@@ -35,6 +39,7 @@ const rows: Expense[] = [
     merchantName: null,
     receiptNumber: null,
     note: null,
+    ...blank,
   },
   {
     id: "4",
@@ -46,6 +51,7 @@ const rows: Expense[] = [
     merchantName: null,
     receiptNumber: null,
     note: null,
+    ...blank,
   },
 ];
 describe("overview aggregation", () => {
