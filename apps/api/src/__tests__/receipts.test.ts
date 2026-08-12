@@ -578,12 +578,13 @@ describe('EXP-17: the extracted purchase date', () => {
   });
 
   /**
-   * AC-3's pinned timezone is what makes the assertions above able to fail. If
-   * the zone were ever unpinned back to UTC they would pass against the broken
-   * implementation, so the pin itself is worth asserting.
+   * AC-3's default zone makes the assertions above able to fail, while EXP-29
+   * deliberately runs this same suite in UTC as a second CI pass. The config
+   * test owns the Malaysia fallback; this proves Vitest applied the requested
+   * zone instead of silently retaining the host setting.
    */
-  it('AC-3: the suite runs east of UTC', () => {
-    expect(new Date().getTimezoneOffset()).toBeLessThan(0);
+  it('AC-3: the suite runs in its configured timezone', () => {
+    expect(Intl.DateTimeFormat().resolvedOptions().timeZone).toBe(process.env.TZ);
   });
 
   /**

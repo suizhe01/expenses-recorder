@@ -98,6 +98,9 @@ jobs:
       - name: Test
         run: npm run test --workspace apps/api
 
+      - name: Generate OpenAPI document
+        run: npm run openapi --workspace apps/api
+
       # EXP-25 AC-10. The web workspace joins the same required check. It needs
       # no database and no browser: the transport and storage are injected, so
       # nothing here touches the network.
@@ -109,6 +112,13 @@ jobs:
 
       - name: Test (web)
         run: npm run test --workspace apps/web
+
+      # Keep this inside the existing required `ci` job: a matrix would rename
+      # the check and strand branch protection waiting for a vanished status.
+      - name: Test both workspaces in UTC
+        run: |
+          TZ=UTC npm run test --workspace apps/api
+          TZ=UTC npm run test --workspace apps/web
 
       # The build is what the production image runs, and a type error in a
       # test file fails it — worth catching here rather than in a Docker layer.

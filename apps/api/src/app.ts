@@ -47,6 +47,22 @@ export type BuildAppOptions = {
   extractor?: ReceiptExtractor;
 };
 
+/**
+ * Test processes must be unable to send mail, even when a developer has a
+ * real key in their local environment. Explicit injection remains first so
+ * suites can still observe their own recording transport.
+ */
+export function selectEmailTransport(config: Config, logger: Parameters<typeof createConsoleTransport>[0]): EmailTransport {
+  if (config.NODE_ENV === 'test' || !config.RESEND_API_KEY) {
+    return createConsoleTransport(logger);
+  }
+
+  return createResendTransport({
+    apiKey: config.RESEND_API_KEY,
+    from: config.MAIL_FROM,
+  });
+}
+
 export function buildApp({
   config,
   database,
@@ -156,14 +172,7 @@ export function buildApp({
 
   // AC-1: Resend when a key is present, the console transport otherwise, so
   // local development and CI need no account, no key, and no network.
-  const transport =
-    emailTransport ??
-    (config.RESEND_API_KEY
-      ? createResendTransport({
-          apiKey: config.RESEND_API_KEY,
-          from: config.MAIL_FROM,
-        })
-      : createConsoleTransport(app.log));
+  const transport = emailTransport ?? selectEmailTransport(config, app.log);
 
   app.log.info(
     { transport: transport.name, from: config.MAIL_FROM },
