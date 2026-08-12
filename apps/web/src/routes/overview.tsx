@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { Trash2 } from "lucide-react";
 import { Link } from "react-router";
 import { createClient } from "@/api/client";
 import {
@@ -15,6 +16,8 @@ import { describeFailure } from "@/api/messages";
 import { CLIENT_ROUTES, confirmReceiptPath } from "@/client-routes";
 import { TabBar } from "@/components/tab-bar";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useSession } from "@/session/context";
 import { currentMonth, donutSlices, overviewFor } from "@/expenses/aggregate";
 import { CategoryDonut } from "@/charts/donut";
@@ -52,6 +55,8 @@ export function OverviewScreen({
   const [currency, setCurrency] = useState<string>();
   const [error, setError] = useState<string>();
   const [loading, setLoading] = useState(true);
+  const [deleting, setDeleting] = useState<Receipt>();
+  const [deleteError, setDeleteError] = useState<string>();
   useEffect(() => {
     let cancelled = false;
     const load = () =>
@@ -85,6 +90,19 @@ export function OverviewScreen({
   const overview = overviewFor(expenses, month, currency);
   const visible = overview;
   const slices = visible ? donutSlices(visible.categories) : [];
+  async function remove() {
+    if (!deleting) return;
+    setDeleteError(undefined);
+    const result = await session.authorized((token) => receiptApi.remove(token, deleting.id));
+    if (result.kind === "ok") {
+      setReceipts((current) => current.filter((receipt) => receipt.id !== deleting.id));
+      setDeleting(undefined);
+    } else if (result.kind === "error" && result.status === 409) {
+      setDeleteError("This receipt is attached to an expense. Delete the expense first.");
+    } else if (!(result.kind === "error" && result.status === 401)) {
+      setDeleteError(describeFailure(result));
+    }
+  }
   return (
     <main className="mx-auto min-h-dvh w-full max-w-xl overflow-x-hidden px-4 pb-[calc(5.5rem+env(safe-area-inset-bottom))]">
       <header className="flex items-center justify-between gap-3 border-b py-4 dark:border-border">
@@ -215,25 +233,19 @@ export function OverviewScreen({
         <section className="mt-5">
           <h2 className="mb-2 font-semibold">{receipts.length} to file</h2>
           <div className="grid gap-2">
-            {receipts.map((receipt) => (
-              <Link
-                key={receipt.id}
-                to={confirmReceiptPath(receipt.id)}
-                className="flex min-h-11 items-center justify-between rounded-lg border p-3 dark:border-border"
-              >
-                <span className="truncate font-medium">
-                  {receipt.extraction?.merchantName ??
-                    receipt.originalFilename ??
-                    "Receipt"}
-                </span>
-                <span className="text-sm text-muted-foreground">
-                  File receipt
-                </span>
+            {receipts.map((receipt) => <div key={receipt.id} className="flex min-w-0 items-center gap-2 rounded-lg border p-1 dark:border-border">
+              <Link to={confirmReceiptPath(receipt.id)} className="flex min-h-11 min-w-0 flex-1 items-center justify-between gap-3 rounded-md px-2">
+                <span className="truncate font-medium">{receipt.extraction?.merchantName ?? receipt.originalFilename ?? "Receipt"}</span>
+                <span className="shrink-0 text-sm text-muted-foreground">File receipt</span>
               </Link>
-            ))}
+              <Button type="button" variant="ghost" size="icon" className="size-11 shrink-0" aria-label={`Delete ${receipt.originalFilename ?? "receipt"}`} onClick={() => { setDeleting(receipt); setDeleteError(undefined); }}><Trash2 aria-hidden="true" /></Button>
+            </div>)}
           </div>
         </section>
       )}
+      <Dialog open={deleting !== undefined} onOpenChange={(open) => { if (!open) { setDeleting(undefined); setDeleteError(undefined); } }}>
+        <DialogContent><DialogHeader><DialogTitle>Delete receipt?</DialogTitle><DialogDescription>Delete this receipt? It leaves your inbox.</DialogDescription></DialogHeader>{deleteError && <Alert variant="destructive" role="alert"><AlertDescription>{deleteError}</AlertDescription></Alert>}<DialogFooter><DialogClose asChild><Button variant="outline">Cancel</Button></DialogClose><Button variant="destructive" onClick={() => void remove()}>Delete</Button></DialogFooter></DialogContent>
+      </Dialog>
       <TabBar active="overview" />
     </main>
   );

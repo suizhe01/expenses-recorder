@@ -5,6 +5,7 @@ import { createAuthApi } from '@/api/auth';
 import { createClient } from '@/api/client';
 import type { Expense } from '@/api/expenses';
 import type { Receipt } from '@/api/receipts';
+import type { ApiResult } from '@/api/client';
 import { OverviewScreen } from '@/routes/overview';
 import { SessionProvider } from '@/session/context';
 import { createSessionManager } from '@/session/session';
@@ -20,12 +21,13 @@ const expenses: Expense[] = [
 ];
 const receipt: Receipt = { id: 'receipt-1', contentType: 'image/jpeg', byteSize: 3, originalFilename: 'lunch.jpg', createdAt: '2026-08-01T00:00:00Z', expenseId: null, extraction: null };
 
-async function mount(rows = expenses, receipts: Receipt[] = [receipt]) {
+async function mount(rows = expenses, receipts: Receipt[] = [receipt], removeResult: ApiResult<void> = { kind: 'ok', status: 204, body: undefined }) {
   const manager = createSessionManager({ auth: createAuthApi(createClient('', async () => new Response(JSON.stringify(session()), { status: 200 }))), storage: fakeStorage() });
   await manager.signIn('person@example.com', 'password');
   const expensesApi = { create: vi.fn(), list: vi.fn(async () => ({ kind: 'ok' as const, status: 200, body: rows })) };
-  const receiptsApi = { list: vi.fn(async () => ({ kind: 'ok' as const, status: 200, body: receipts })), upload: vi.fn(), remove: vi.fn(), image: vi.fn() };
+  const receiptsApi = { list: vi.fn(async () => ({ kind: 'ok' as const, status: 200, body: receipts })), upload: vi.fn(), remove: vi.fn(async () => removeResult), image: vi.fn() };
   render(<SessionProvider manager={manager}><MemoryRouter initialEntries={[CLIENT_ROUTES.home]}><Routes><Route path={CLIENT_ROUTES.home} element={<OverviewScreen expensesApi={expensesApi} receiptsApi={receiptsApi} />} /><Route path={CLIENT_ROUTES.confirmReceipt} element={<h1>Confirm receipt</h1>} /></Routes></MemoryRouter></SessionProvider>);
+  return { receiptsApi };
 }
 
 describe('overview', () => {
@@ -56,5 +58,33 @@ describe('overview', () => {
     expect(await screen.findByText('Saved')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Discard' })).not.toBeInTheDocument();
     vi.unstubAllGlobals();
+  });
+  it('EXP-42 AC-1 to AC-3: deletes from the to-file list without navigating', async () => {
+    const { receiptsApi } = await mount();
+    await screen.findByText('1 to file');
+    await userEvent.click(screen.getByRole('button', { name: 'Delete lunch.jpg' }));
+    expect(screen.getByRole('heading', { name: 'Delete receipt?' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Confirm receipt' })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    expect(receiptsApi.remove).toHaveBeenCalledWith(expect.any(String), 'receipt-1');
+    expect(screen.queryByText('1 to file')).not.toBeInTheDocument();
+    expect(screen.queryByText('lunch.jpg')).not.toBeInTheDocument();
+  });
+  it('EXP-42 AC-2: cancel keeps the receipt untouched', async () => {
+    await mount();
+    await screen.findByText('1 to file');
+    await userEvent.click(screen.getByRole('button', { name: 'Delete lunch.jpg' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.getByText('1 to file')).toBeInTheDocument();
+    expect(screen.getByText('lunch.jpg')).toBeInTheDocument();
+  });
+  it('EXP-42 AC-4: keeps the dialog and row on an attached receipt error', async () => {
+    await mount(expenses, [receipt], { kind: 'error' as const, status: 409, message: 'Conflict' });
+    await screen.findByText('1 to file');
+    await userEvent.click(screen.getByRole('button', { name: 'Delete lunch.jpg' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    expect(await screen.findByText('This receipt is attached to an expense. Delete the expense first.')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Delete receipt?' })).toBeInTheDocument();
+    expect(screen.getByText('lunch.jpg')).toBeInTheDocument();
   });
 });
