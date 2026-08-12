@@ -164,7 +164,7 @@ export function HomeScreen({ receiptsApi }: { receiptsApi?: ReceiptsApi } = {}) 
           </div>
         </div>
       </section>
-      <TabBar active="inbox" />
+      <TabBar active="inbox" capture={false} />
 
       <Dialog open={deleting !== undefined} onOpenChange={(open) => { if (!open) { setDeleting(undefined); setDeleteError(undefined); } }}>
         <DialogContent><DialogHeader><DialogTitle>Delete receipt?</DialogTitle><DialogDescription>Delete this receipt? It leaves your inbox.</DialogDescription></DialogHeader>{deleteError && <Alert variant="destructive"><AlertDescription>{deleteError}</AlertDescription></Alert>}<DialogFooter><DialogClose asChild><Button variant="outline">Cancel</Button></DialogClose><Button variant="destructive" onClick={() => void remove()}>Delete</Button></DialogFooter></DialogContent>
