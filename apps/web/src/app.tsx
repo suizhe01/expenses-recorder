@@ -10,6 +10,7 @@ import { CLIENT_ROUTES } from '@/client-routes';
 import { ExpenseDetailScreen } from '@/routes/expense-detail';
 import { SettingsScreen } from '@/routes/settings';
 import { CategoriesScreen } from '@/routes/categories';
+import { AddExpenseScreen } from '@/routes/add-expense';
 
 /**
  * The route table plus the signed-in/signed-out split.
@@ -60,6 +61,7 @@ export function Routing() {
         element={signedIn ? <OverviewScreen /> : <Navigate to={CLIENT_ROUTES.signIn} replace />}
       />
       <Route path={CLIENT_ROUTES.confirmReceipt} element={signedIn ? <ConfirmReceiptScreen /> : <Navigate to={CLIENT_ROUTES.signIn} replace />} />
+      <Route path={CLIENT_ROUTES.add} element={signedIn ? <AddExpenseScreen /> : <Navigate to={CLIENT_ROUTES.signIn} replace />} />
       <Route path={CLIENT_ROUTES.catchAll} element={<Navigate to={signedIn ? CLIENT_ROUTES.home : CLIENT_ROUTES.signIn} replace />} />
     </Routes>
   );
