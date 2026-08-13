@@ -1,0 +1,22 @@
+{
+  "isReceipt": true,
+  "merchantName": "DAY ONE",
+  "merchantTaxId": "B16-2212-32000009",
+  "receiptNumber": "002-C1/103016",
+  "purchasedOn": "2023-04-15",
+  "purchasedAtTime": "14:52:00",
+  "subtotalCents": 14930,
+  "taxCents": 896,
+  "roundingCents": null,
+  "totalCents": 17070,
+  "currency": "MYR",
+  "paymentMethod": "Visa",
+  "items": [
+    { "description": "TW Crispy Chicken Chop Chew Noodle", "quantity": "2", "unitPriceCents": null, "lineTotalCents": 5380, "components": [] },
+    { "description": "TW Pork Chop Chew Noodle", "quantity": "1", "unitPriceCents": null, "lineTotalCents": 2690, "components": [] },
+    { "description": "Roasted Pork Chew Noodle", "quantity": "1", "unitPriceCents": null, "lineTotalCents": 2390, "components": [] },
+    { "description": "Cold Brew Honey Lemon", "quantity": "1", "unitPriceCents": null, "lineTotalCents": 890, "components": [] },
+    { "description": "Four Season Lemon Tea", "quantity": "1", "unitPriceCents": null, "lineTotalCents": 1090, "components": [] },
+    { "description": "T-Roasted Pork Chew Noodle", "quantity": "1", "unitPriceCents": null, "lineTotalCents": 2490, "components": [] }
+  ]
+}
