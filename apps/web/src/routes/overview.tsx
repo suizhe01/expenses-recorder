@@ -21,6 +21,7 @@ import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, Di
 import { useSession } from "@/session/context";
 import { currentMonth, donutSlices, overviewFor } from "@/expenses/aggregate";
 import { CategoryDonut } from "@/charts/donut";
+import { CategoryIcon } from "@/components/category-icon";
 import { formatMoney, monthLabel } from "./expenses";
 
 function monthChoices(expenses: Expense[], selected: string): string[] {
@@ -214,6 +215,7 @@ export function OverviewScreen({
                         className="size-3 rounded-full"
                         style={{ backgroundColor: slice.color }}
                       />
+                      <CategoryIcon name={slice.name} className="size-4 shrink-0 text-muted-foreground" />
                       {slice.name}{" "}
                       <span className="text-sm text-muted-foreground">
                         · {slice.count}
