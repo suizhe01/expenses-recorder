@@ -13,10 +13,12 @@ import type { Receipt } from '@/api/receipts';
 const receipt: Receipt = { id: 'receipt-1', contentType: 'image/jpeg', byteSize: 4, originalFilename: 'DAY ONE', createdAt: '2026-08-12T00:00:00Z', expenseId: null, extraction: { status: 'failed', isReceipt: false, merchantName: null, purchasedOn: null, totalCents: null, currency: null } };
 const category = { id: '00000000-0000-0000-0000-000000000002', name: 'Food', createdAt: '2026-08-12T00:00:00Z', updatedAt: '2026-08-12T00:00:00Z' };
 
-async function mount(fileStatus = 503, expense: { status: number; body: unknown } = { status: 201, body: { id: 'expense-1' } }, holdExpense = false, loadedReceipt: Receipt = receipt) {
+async function mount(fileStatus = 503, expense: { status: number; body: unknown } = { status: 201, body: { id: 'expense-1' } }, holdExpense = false, loadedReceipt: Receipt = receipt, retry?: { status: number; body: unknown; headers?: HeadersInit; hold?: boolean }) {
   const calls: string[] = [];
   vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
     const path = new URL(url, 'http://test.local').pathname; calls.push(`${init?.method ?? 'GET'} ${path}`);
+    if (path === '/receipts' && init?.method === 'POST' && retry?.hold) return new Promise<Response>(() => undefined);
+    if (path === '/receipts' && init?.method === 'POST') return new Response(JSON.stringify(retry?.body), { status: retry?.status ?? 500, headers: retry?.headers });
     if (path === '/receipts') return new Response(JSON.stringify([loadedReceipt]), { status: 200 });
     if (path === '/categories') return new Response(JSON.stringify([category]), { status: 200 });
     if (path === '/receipts/receipt-1/file') return new Response(fileStatus === 200 ? new Blob(['image']) : JSON.stringify({ error: 'Unavailable' }), { status: fileStatus });
@@ -35,13 +37,77 @@ beforeEach(() => { vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:receip
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe('confirm receipt', () => {
+  const successfulRetry: Receipt = { ...receipt, extraction: { status: 'succeeded', isReceipt: true, merchantName: 'Retry Cafe', purchasedOn: '2026-08-12', totalCents: 1234, currency: 'MYR', items: [{ description: 'Tea', quantity: '1', unitPriceCents: 1234, lineTotalCents: 1234 }] } };
+
   it('keeps a failed-image receipt savable and does not post without a category', async () => {
     const { calls } = await mount();
     expect(await screen.findByText('Receipt image is unavailable')).toBeInTheDocument();
     expect(screen.getByText("We couldn't read this receipt — enter the details yourself.")).toBeInTheDocument();
     expect(screen.getByText("This doesn't look like a receipt. Check the photo before saving.")).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Save expense' })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument();
     expect(calls.filter((call) => call === 'POST /expenses')).toHaveLength(0);
+  });
+
+  it('EXP-48 AC-1 to AC-5: retries the held image and uses the first-load population path', async () => {
+    const { calls } = await mount(200, undefined, false, receipt, { status: 200, body: successfulRetry });
+    await userEvent.click(await screen.findByRole('button', { name: 'Try again' }));
+    expect(await screen.findByDisplayValue('Retry Cafe')).toBeInTheDocument();
+    expect(screen.getByLabelText('Total')).toHaveValue('12.34');
+    expect(screen.getByRole('heading', { name: 'Items' })).toBeInTheDocument();
+    expect(calls.filter((call) => call === 'POST /receipts')).toHaveLength(1);
+  });
+
+  it('EXP-48 AC-1: offers retry for skipped extractions but never for successful ones', async () => {
+    const { view } = await mount(200, undefined, false, { ...receipt, extraction: { ...receipt.extraction!, status: 'skipped' } });
+    expect(await screen.findByRole('button', { name: 'Try again' })).toBeInTheDocument();
+    view.unmount();
+    await mount(200, undefined, false, successfulRetry);
+    expect(await screen.findByDisplayValue('Retry Cafe')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument();
+  });
+
+  it('EXP-48 AC-4: cancelling replacement preserves typed values and discards the reading', async () => {
+    await mount(200, undefined, false, receipt, { status: 200, body: successfulRetry });
+    await userEvent.clear(await screen.findByLabelText('Total')); await userEvent.type(screen.getByLabelText('Total'), '7.00');
+    await userEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(await screen.findByRole('dialog')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.getByLabelText('Total')).toHaveValue('7.00');
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('EXP-48 AC-6 to AC-9: preserves manual values for failed retries, reports rate limits, and rejects another receipt', async () => {
+    const { view } = await mount(200, undefined, false, receipt, { status: 200, body: { ...receipt, extraction: { ...receipt.extraction!, status: 'failed' } } });
+    await userEvent.clear(await screen.findByLabelText('Total')); await userEvent.type(screen.getByLabelText('Total'), '7.00');
+    await userEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(await screen.findByText('We tried again but still couldn’t read this receipt. Enter the details yourself.')).toBeInTheDocument();
+    expect(screen.getByLabelText('Total')).toHaveValue('7.00');
+    view.unmount();
+
+    await mount(200, undefined, false, receipt, { status: 429, body: { error: 'Too many uploads' }, headers: { 'retry-after': '41' } });
+    await userEvent.click(await screen.findByRole('button', { name: 'Try again' }));
+    expect(await screen.findByText('Too many uploads. Try again in 41 seconds.')).toBeInTheDocument();
+  });
+
+  it('EXP-48 AC-8 and AC-9: disables a retry in flight and never applies another receipt', async () => {
+    const { calls, view } = await mount(200, undefined, false, receipt, { status: 200, body: successfulRetry, hold: true });
+    const retry = await screen.findByRole('button', { name: 'Try again' });
+    fireEvent.click(retry); fireEvent.click(retry);
+    await waitFor(() => expect(calls.filter((call) => call === 'POST /receipts')).toHaveLength(1));
+    expect(screen.getByRole('button', { name: 'Trying again…' })).toBeDisabled();
+    view.unmount();
+
+    await mount(200, undefined, false, receipt, { status: 200, body: { ...successfulRetry, id: 'receipt-2' } });
+    await userEvent.click(await screen.findByRole('button', { name: 'Try again' }));
+    expect(await screen.findByText('The new reading did not match this receipt. Nothing was changed.')).toBeInTheDocument();
+    expect(screen.queryByDisplayValue('Retry Cafe')).not.toBeInTheDocument();
+  });
+
+  it('EXP-48 AC-10: leaves when the retry response says the receipt was filed', async () => {
+    await mount(200, undefined, false, receipt, { status: 200, body: { ...successfulRetry, expenseId: 'expense-1' } });
+    await userEvent.click(await screen.findByRole('button', { name: 'Try again' }));
+    expect(await screen.findByText('Inbox')).toBeInTheDocument();
   });
 
   it('revokes the image URL and expands a hidden-field error', async () => {
@@ -78,6 +144,7 @@ describe('confirm receipt', () => {
       },
     };
     const { calls } = await mount(503, { status: 201, body: { id: 'expense-1' } }, false, extracted);
+    expect(screen.queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument();
     expect(await screen.findByRole('heading', { name: 'Items' })).toBeInTheDocument();
     expect(screen.getAllByLabelText('Description')).toHaveLength(2);
     await userEvent.selectOptions(screen.getByLabelText('Category'), category.id);
