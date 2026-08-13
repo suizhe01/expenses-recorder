@@ -163,6 +163,13 @@ describe('confirm receipt', () => {
     ]);
   });
 
+  it('EXP-50 AC-5: reconciles a signed subsidy line against the receipt total', async () => {
+    const extracted = { ...receipt, extraction: { status: 'succeeded', isReceipt: true, merchantName: 'Shell', purchasedOn: '2026-08-11', totalCents: 8849, currency: 'MYR', items: [{ description: 'FuelSave 95(Pump 4)', quantity: null, unitPriceCents: null, lineTotalCents: 16765 }, { description: 'BUDI95 Subsidy', quantity: null, unitPriceCents: null, lineTotalCents: -7916 }] } };
+    await mount(503, { status: 201, body: { id: 'expense-1' } }, false, extracted);
+    expect(await screen.findByRole('heading', { name: 'Items' })).toBeInTheDocument();
+    expect(screen.queryByText(/Item line totals do not match/)).not.toBeInTheDocument();
+  });
+
   it('EXP-44 AC-1 to AC-6: edits collapsed components, reconciles their totals, and saves nested items', async () => {
     const extracted = {
       ...receipt,

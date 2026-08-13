@@ -131,8 +131,17 @@ const totalCentsSchema = z
   .int({ message: 'must be a whole number of cents' })
   .positive({ message: 'must be greater than zero' });
 
-/** AC-6. A component line may be zero but never negative. */
-const componentCentsSchema = z
+/**
+ * A printed line may be negative: subsidies, discounts, vouchers and returns
+ * reduce a receipt. Shell's BUDI95 fuel subsidy is the case that proved this.
+ */
+const lineCentsSchema = z
+  .number()
+  .int({ message: 'must be a whole number of cents' })
+  .nullable();
+
+/** Subtotal and tax describe charges, not discount lines, so they stay non-negative. */
+const chargeCentsSchema = z
   .number()
   .int({ message: 'must be a whole number of cents' })
   .min(0, { message: 'must not be negative' })
@@ -147,8 +156,8 @@ const roundingCentsSchema = z
 const componentSchema = z.object({
   description: textSchema(500).optional(),
   quantity: textSchema(50).optional(),
-  unitPriceCents: componentCentsSchema.optional(),
-  lineTotalCents: componentCentsSchema.optional(),
+  unitPriceCents: lineCentsSchema.optional(),
+  lineTotalCents: lineCentsSchema.optional(),
 }).transform((item) => ({
   description: item.description ?? null,
   quantity: item.quantity ?? null,
@@ -168,8 +177,8 @@ const componentsSchema = z.array(componentSchema).max(50, {
 const itemSchema = z.object({
   description: textSchema(500).optional(),
   quantity: textSchema(50).optional(),
-  unitPriceCents: componentCentsSchema.optional(),
-  lineTotalCents: componentCentsSchema.optional(),
+  unitPriceCents: lineCentsSchema.optional(),
+  lineTotalCents: lineCentsSchema.optional(),
   components: componentsSchema.optional(),
 }).transform((item) => ({
   description: item.description ?? null,
@@ -201,8 +210,8 @@ const createSchema = z.object({
   purchasedOn: purchasedOnSchema,
   receiptId: uuidSchema.nullable().optional(),
   purchasedAtTime: timeSchema.nullable().optional(),
-  subtotalCents: componentCentsSchema.optional(),
-  taxCents: componentCentsSchema.optional(),
+  subtotalCents: chargeCentsSchema.optional(),
+  taxCents: chargeCentsSchema.optional(),
   roundingCents: roundingCentsSchema.optional(),
   currency: currencySchema.optional(),
   merchantName: textSchema(255).optional(),
