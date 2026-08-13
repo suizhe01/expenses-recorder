@@ -6,4 +6,6 @@ Expected JSON is never captured from a model run. That would preserve the model'
 
 All images here are the developer's own receipts and contain no third-party personal data. Before adding an image, redact or omit any sensitive information.
 
+The Shell BUDI95 case uses `F ONE LYNAZFEA` as its expected merchant. It is the printed dealer name; Shell is a logo only, so the fixture does not depend on whether a model recognises that logo.
+
 Run `npm run eval:extraction` deliberately with `GEMINI_API_KEY` set. It makes live, billable model calls and is not part of CI or `npm test`.

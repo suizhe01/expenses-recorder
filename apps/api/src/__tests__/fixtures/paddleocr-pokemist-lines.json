@@ -1,0 +1,11 @@
+[
+  {"text":"POKEMIST(MALIM)","polygon":[{"x":20,"y":10},{"x":220,"y":10},{"x":220,"y":30},{"x":20,"y":30}],"confidence":0.99},
+  {"text":"1 Cajun Chicken Thighs 17.90","polygon":[{"x":20,"y":80},{"x":340,"y":80},{"x":340,"y":100},{"x":20,"y":100}],"confidence":0.99},
+  {"text":"1 Shimeji Brown Rice","polygon":[{"x":44,"y":110},{"x":280,"y":110},{"x":280,"y":130},{"x":44,"y":130}],"confidence":0.99},
+  {"text":"1 Cajun Chicken Thighs 17.90","polygon":[{"x":20,"y":140},{"x":340,"y":140},{"x":340,"y":160},{"x":20,"y":160}],"confidence":0.99},
+  {"text":"1 Sushi Rice","polygon":[{"x":44,"y":170},{"x":210,"y":170},{"x":210,"y":190},{"x":44,"y":190}],"confidence":0.99},
+  {"text":"1 Add Rice 1.00","polygon":[{"x":44,"y":200},{"x":240,"y":200},{"x":240,"y":220},{"x":44,"y":220}],"confidence":0.99},
+  {"text":"1 Cajun Chicken Thighs 17.90","polygon":[{"x":20,"y":230},{"x":340,"y":230},{"x":340,"y":250},{"x":20,"y":250}],"confidence":0.99},
+  {"text":"1 Edamame","polygon":[{"x":44,"y":260},{"x":190,"y":260},{"x":190,"y":280},{"x":44,"y":280}],"confidence":0.99},
+  {"text":"1 Add Rice 1.00","polygon":[{"x":44,"y":290},{"x":240,"y":290},{"x":240,"y":310},{"x":44,"y":310}],"confidence":0.99}
+]

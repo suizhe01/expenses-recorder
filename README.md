@@ -69,6 +69,23 @@ npm install
 npm run dev            # tsx watch, restarts on change
 ```
 
+### Local PaddleOCR proof of concept
+
+EXP-52 adds an **observation-only** local OCR service. It is not part of the
+receipt upload path and makes no cloud request. Start it when evaluating a
+receipt image:
+
+```bash
+docker compose --profile ocr up --build paddleocr
+curl -F image=@apps/api/eval/receipts/shell-budi95.jpg http://localhost:8008/ocr
+```
+
+The first start downloads PaddleOCR's English models into the named Docker
+volume `paddleocr-models` (mounted at `/root/.paddlex`); later starts reuse
+them. On macOS use Docker Desktop as above. On Windows, run the same commands
+from an Ubuntu WSL terminal after enabling Docker Desktop's WSL integration.
+This POC supports one JPEG, PNG, or WebP image only—no PDFs or multi-page input.
+
 ```bash
 cd apps/web
 npm run dev            # Vite at http://localhost:5173, proxying API calls
