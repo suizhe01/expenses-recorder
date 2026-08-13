@@ -1,0 +1,19 @@
+{
+  "isReceipt": true,
+  "merchantName": "POKEMIST(MALIM)",
+  "merchantTaxId": "UT0041856-D",
+  "receiptNumber": "001/59734",
+  "purchasedOn": "2026-08-10",
+  "purchasedAtTime": "18:40:00",
+  "subtotalCents": 5570,
+  "taxCents": null,
+  "roundingCents": 1,
+  "totalCents": 5905,
+  "currency": "MYR",
+  "paymentMethod": "Touch N Go",
+  "items": [
+    { "description": "Cajun Chicken Thighs", "quantity": "1", "unitPriceCents": null, "lineTotalCents": 1790, "components": [{ "description": "Shimeji Brown Rice", "quantity": "1", "unitPriceCents": null, "lineTotalCents": null }, { "description": "New Garlic Sauce", "quantity": "1", "unitPriceCents": null, "lineTotalCents": null }, { "description": "Tamago", "quantity": "1", "unitPriceCents": null, "lineTotalCents": null }, { "description": "Edamame", "quantity": "1", "unitPriceCents": null, "lineTotalCents": null }, { "description": "Braised Sweet Soy Lotus Root", "quantity": "1", "unitPriceCents": null, "lineTotalCents": null }, { "description": "Charred Broccoli", "quantity": "1", "unitPriceCents": null, "lineTotalCents": null }] },
+    { "description": "Cajun Chicken Thighs", "quantity": "1", "unitPriceCents": null, "lineTotalCents": 1790, "components": [{ "description": "Sushi Rice", "quantity": "1", "unitPriceCents": null, "lineTotalCents": null }, { "description": "New Garlic Sauce", "quantity": "1", "unitPriceCents": null, "lineTotalCents": null }, { "description": "Tamago", "quantity": "1", "unitPriceCents": null, "lineTotalCents": null }, { "description": "Chuka Wakame", "quantity": "1", "unitPriceCents": null, "lineTotalCents": null }, { "description": "Baked Potatoes", "quantity": "1", "unitPriceCents": null, "lineTotalCents": null }, { "description": "Baked Pumpkin", "quantity": "1", "unitPriceCents": null, "lineTotalCents": null }, { "description": "Add Rice", "quantity": "1", "unitPriceCents": null, "lineTotalCents": 100 }] },
+    { "description": "Cajun Chicken Thighs", "quantity": "1", "unitPriceCents": null, "lineTotalCents": 1790, "components": [{ "description": "Sushi Rice", "quantity": "1", "unitPriceCents": null, "lineTotalCents": null }, { "description": "New Garlic Sauce", "quantity": "1", "unitPriceCents": null, "lineTotalCents": null }, { "description": "Tamago", "quantity": "1", "unitPriceCents": null, "lineTotalCents": null }, { "description": "Edamame", "quantity": "1", "unitPriceCents": null, "lineTotalCents": null }, { "description": "Chuka Wakame", "quantity": "1", "unitPriceCents": null, "lineTotalCents": null }, { "description": "Charred Broccoli", "quantity": "1", "unitPriceCents": null, "lineTotalCents": null }, { "description": "Baked Pumpkin", "quantity": "1", "unitPriceCents": null, "lineTotalCents": null }, { "description": "Add Rice", "quantity": "1", "unitPriceCents": null, "lineTotalCents": 100 }] }
+  ]
+}
