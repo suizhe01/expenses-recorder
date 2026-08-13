@@ -18,3 +18,4 @@ backups/
 # untrack what is already committed. Anything new under .claude/ that SHOULD be
 # shared needs `git add -f`.
 .claude/
+.paddleocr-venv
