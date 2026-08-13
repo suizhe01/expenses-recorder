@@ -6,7 +6,6 @@ only recognised lines and geometry, and knows nothing about the expense API.
 
 from __future__ import annotations
 
-from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Annotated
 
@@ -63,7 +62,9 @@ async def read_receipt(
     with NamedTemporaryFile(suffix=suffix) as temporary:
         temporary.write(await image.read())
         temporary.flush()
-        result = next(ocr.predict(Path(temporary.name)))
+        # PaddleOCR 3.x accepts a string path and returns a one-image result
+        # list for one input image.
+        result = ocr.predict(temporary.name)[0]
 
     lines = [
         OcrLine(

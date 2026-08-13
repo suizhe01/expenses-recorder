@@ -71,6 +71,11 @@ services:
   # compose entry and is not wired into the API request path.
   paddleocr:
     profiles: ['ocr']
+    # PaddlePaddle's Linux arm64 CPU wheel currently segfaults on real receipt
+    # inference under Docker Desktop. Use the stable x86_64 wheel; Docker
+    # Desktop emulates it on Apple Silicon and Windows WSL normally runs it
+    # natively.
+    platform: linux/amd64
     build:
       context: ./services/paddleocr
     ports:
