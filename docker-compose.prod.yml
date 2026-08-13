@@ -46,6 +46,10 @@ services:
       MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-10485760}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
+      # Internal-only OCR service. It has no host port and is reached only on
+      # Compose's private network by this API container.
+      PADDLEOCR_BASE_URL: http://paddleocr:8008
+      PADDLEOCR_TIMEOUT_MS: ${PADDLEOCR_TIMEOUT_MS:-5000}
       TZ: UTC
       # AC-4, AC-5. On here, unlike development: the Funnel is a reverse proxy,
       # so without this every request looks like it came from the same address
@@ -63,10 +67,23 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      paddleocr:
+        condition: service_started
     volumes:
       # The receipts archive. No source bind mounts — the code is in the image.
       - receipts-data:/data/receipts
 
+  paddleocr:
+    platform: linux/amd64
+    build:
+      context: ./services/paddleocr
+    restart: unless-stopped
+    # No ports: this service is deliberately inaccessible from the host, LAN,
+    # and public internet. The API uses http://paddleocr:8008 internally.
+    volumes:
+      - paddleocr-models:/root/.paddlex
+
 volumes:
   postgres-data:
   receipts-data:
+  paddleocr-models:

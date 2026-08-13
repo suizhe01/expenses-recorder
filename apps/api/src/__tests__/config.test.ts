@@ -16,6 +16,18 @@ describe('parseConfig', () => {
     expect(config.HOST).toBe('0.0.0.0');
     expect(config.NODE_ENV).toBe('development');
     expect(config.LOG_LEVEL).toBe('info');
+    expect(config.PADDLEOCR_BASE_URL).toBeUndefined();
+    expect(config.PADDLEOCR_TIMEOUT_MS).toBe(5000);
+  });
+
+  it('accepts the internal PaddleOCR URL and timeout used by production Compose', () => {
+    const config = parseConfig({
+      ...validEnv,
+      PADDLEOCR_BASE_URL: 'http://paddleocr:8008',
+      PADDLEOCR_TIMEOUT_MS: '4000',
+    });
+    expect(config.PADDLEOCR_BASE_URL).toBe('http://paddleocr:8008');
+    expect(config.PADDLEOCR_TIMEOUT_MS).toBe(4000);
   });
 
   // AC-5: a missing required variable is rejected and named.

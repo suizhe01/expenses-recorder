@@ -1,6 +1,7 @@
 import type { Executor } from '../auth/sessions.js';
 import {
   estimateCostMicros,
+  type ExtractionSource,
   type ExtractionResult,
 } from './extraction.js';
 
@@ -52,6 +53,7 @@ export type ExtractionItem = ExtractionComponent & {
  */
 export type Extraction = {
   status: ExtractionStatus;
+  source: ExtractionSource | null;
   isReceipt: boolean | null;
   confidence: number | null;
   merchantName: string | null;
@@ -72,6 +74,10 @@ export type Extraction = {
 export function toExtraction(row: ExtractionRow): Extraction {
   return {
     status: row.status,
+    // Existing rows retain their original Gemini model name and intentionally
+    // have no source. New coordinated rows persist the user-facing source in
+    // the existing per-attempt model column, without rewriting history.
+    source: row.model === 'PaddleOCR' || row.model === 'Gemini fallback' ? row.model : null,
     isReceipt: row.is_receipt,
     // numeric comes back as a string from pg to avoid float loss.
     confidence: row.confidence === null ? null : Number(row.confidence),
@@ -138,7 +144,7 @@ export async function recordExtraction(
     [
       receiptId,
       result.status,
-      model,
+      result.status === 'succeeded' && result.source ? result.source : model,
       promptTokens,
       outputTokens,
       estimateCostMicros(promptTokens, outputTokens),

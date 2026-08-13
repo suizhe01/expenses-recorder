@@ -87,6 +87,7 @@ const extractionResponse = {
   type: ['object', 'null'],
   properties: {
     status: { type: 'string' },
+    source: { type: ['string', 'null'] },
     isReceipt: { type: ['boolean', 'null'] },
     confidence: { type: ['number', 'null'] },
     merchantName: { type: ['string', 'null'] },

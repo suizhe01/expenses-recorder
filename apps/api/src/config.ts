@@ -107,6 +107,15 @@ const configSchema = z.object({
   // AC-11. In config so a model upgrade needs no code change; recorded on every
   // attempt row so an old reading always says which model produced it.
   GEMINI_MODEL: z.string().min(1).default('gemini-3.6-flash'),
+  // Optional outside Compose. In production the API receives the internal
+  // service URL; leaving it unset keeps a bare local API usable with Gemini.
+  PADDLEOCR_BASE_URL: z.preprocess(
+    (value) => (value === '' ? undefined : value),
+    z.string().url().refine((value) => new URL(value).protocol === 'http:', {
+      message: 'must be an absolute http:// URL',
+    }).optional(),
+  ),
+  PADDLEOCR_TIMEOUT_MS: z.coerce.number().int().positive().default(5_000),
 });
 
 export type Config = z.infer<typeof configSchema>;
