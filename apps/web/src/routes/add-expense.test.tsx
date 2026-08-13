@@ -40,4 +40,21 @@ describe('add expense', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Retry' }));
     expect(await screen.findByRole('heading', { name: 'Confirm receipt' })).toBeInTheDocument();
   });
+
+  it.each([
+    [null, 'You already have this receipt.'],
+    ['expense-1', "You already have this receipt — it's already filed."],
+  ])('keeps a duplicate upload on Add expense (%s)', async (expenseId, notice) => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      const path = new URL(url, 'http://test.local').pathname;
+      if (path === '/categories') return new Response(JSON.stringify([category]), { status: 200 });
+      if (path === '/receipts') return new Response(JSON.stringify({ ...uploaded, expenseId }), { status: 200, headers: { 'content-type': 'application/json' } });
+      return new Response(null, { status: 404 });
+    }));
+    await mount();
+    await userEvent.upload(screen.getByLabelText('Upload photo'), new File(['jpeg'], 'duplicate.jpg', { type: 'image/jpeg' }));
+    expect(await screen.findByText(notice)).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Add expense' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Confirm receipt' })).not.toBeInTheDocument();
+  });
 });

@@ -172,4 +172,19 @@ describe('confirm receipt', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Remove item 2' }));
     expect(screen.getAllByLabelText('Description')).toHaveLength(1);
   });
+
+  it('EXP-44 AC-1: removes a nested component', async () => {
+    const extracted = {
+      ...receipt,
+      extraction: {
+        status: 'succeeded', isReceipt: true, merchantName: 'Market', purchasedOn: '2026-08-12', totalCents: 500, currency: 'MYR',
+        items: [{ description: 'Meal', quantity: '1', unitPriceCents: 500, lineTotalCents: 500, components: [{ description: 'Rice', quantity: '1', unitPriceCents: 100, lineTotalCents: 100 }] }],
+      },
+    };
+    await mount(503, { status: 201, body: { id: 'expense-1' } }, false, extracted);
+    await userEvent.click(await screen.findByRole('button', { name: '1 component' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Remove component 1 from item 1' }));
+    expect(screen.queryByLabelText('Component 1 description')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '1 component' })).not.toBeInTheDocument();
+  });
 });
