@@ -74,7 +74,9 @@ services:
     build:
       context: ./services/paddleocr
     ports:
-      - '${PADDLEOCR_PORT:-8008}:8008'
+      # Keep the observation service on this machine; it is never a LAN or
+      # production endpoint.
+      - '127.0.0.1:${PADDLEOCR_PORT:-8008}:8008'
     volumes:
       # PaddleOCR downloads its official models on first use. Keeping its cache
       # in a named volume makes subsequent starts offline and fast.
