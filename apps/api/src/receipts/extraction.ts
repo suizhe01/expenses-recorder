@@ -41,12 +41,17 @@ export type ExtractedFields = {
   items: ExtractedItem[];
 };
 
+/** The provider that produced a successful reading shown to the user. */
+export type ExtractionSource = 'PaddleOCR' | 'Gemini fallback';
+
 export type ExtractionResult =
   | {
       status: 'succeeded';
       fields: ExtractedFields;
       promptTokens: number | null;
       outputTokens: number | null;
+      /** Set by the primary/fallback coordinator, never by Gemini itself. */
+      source?: ExtractionSource;
     }
   | { status: 'failed'; error: string }
   | { status: 'skipped' };

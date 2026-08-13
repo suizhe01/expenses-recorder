@@ -23,8 +23,9 @@ so a hostname that changes silently breaks every link already sent.
 - A Tailscale account (personal plan is enough — Funnel is included).
 - A Resend API key, if you want verification emails delivered rather than
   logged. Optional; without it links are written to the API log.
-- A Google AI Studio key, if you want receipts read automatically. Optional;
-  without it uploads still succeed and record a `skipped` attempt.
+- A Google AI Studio key, optional. PaddleOCR is the normal local reader;
+  Gemini is used only when that service is unavailable, times out, or sends an
+  unusable response.
 
 > **`MAIL_FROM` limitation.** The default `onboarding@resend.dev` is Resend's
 > shared test sender: it **only delivers to the address on your Resend
@@ -100,6 +101,7 @@ Edit `.env` and set:
 | `TRUST_PROXY` | `true`. See the warning below |
 | `RESEND_API_KEY` | your key, or leave unset |
 | `GEMINI_API_KEY` | your key, or leave unset |
+| `PADDLEOCR_TIMEOUT_MS` | optional; defaults to `5000` milliseconds before Gemini fallback |
 
 Then lock it down:
 
@@ -393,3 +395,26 @@ or was updated without recreating the container. See step 10.
 
 **Funnel says it is not enabled for this tailnet** — the node attribute is
 missing from the tailnet ACL. `tailscale funnel 3000` prints the exact snippet.
+
+**PaddleOCR on a Windows/WSL host**
+
+The production Compose file starts `paddleocr` with the API. It has no host
+port: only the API can reach `http://paddleocr:8008` over the Compose network.
+The first OCR request downloads models into the named `paddleocr-models`
+volume, so keep that volume when rebuilding or updating the stack. On a
+Windows laptop, run the same commands from an Ubuntu WSL terminal with Docker
+Desktop's WSL integration enabled.
+
+The API waits `PADDLEOCR_TIMEOUT_MS` (five seconds by default). If the service
+is stopped, slow, or returns invalid data, the API automatically tries Gemini
+instead. Check the service without exposing it publicly:
+
+```bash
+docker compose -f docker-compose.prod.yml ps
+docker compose -f docker-compose.prod.yml logs --tail=100 paddleocr
+docker compose -f docker-compose.prod.yml restart paddleocr
+```
+
+If the API keeps using the fallback, inspect the PaddleOCR logs first. A clean
+restart can still spend time downloading models on a new or deleted cache
+volume; subsequent starts reuse the named volume.

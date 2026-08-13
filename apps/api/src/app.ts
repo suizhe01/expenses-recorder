@@ -26,6 +26,8 @@ import {
   createSkippingExtractor,
   type ReceiptExtractor,
 } from './receipts/extraction.js';
+import { createPaddleOcrPrimaryExtractor } from './receipts/paddleocr-extractor.js';
+import { createPaddleOcrClient } from './receipts/paddleocr.js';
 
 const require = createRequire(import.meta.url);
 const pkg = require('../package.json') as { version: string };
@@ -184,18 +186,22 @@ export function buildApp({
   // AC-7: no key means skip, not fail. A failing extractor would make every
   // keyless machine look like Gemini was broken and bury a real outage in the
   // noise.
-  const receiptExtractor =
-    extractor ??
-    (config.GEMINI_API_KEY
-      ? createGeminiExtractor({
-          apiKey: config.GEMINI_API_KEY,
-          model: config.GEMINI_MODEL,
-        })
-      : createSkippingExtractor(config.GEMINI_MODEL));
+  const geminiExtractor = config.GEMINI_API_KEY
+    ? createGeminiExtractor({
+        apiKey: config.GEMINI_API_KEY,
+        model: config.GEMINI_MODEL,
+      })
+    : createSkippingExtractor(config.GEMINI_MODEL);
+  const receiptExtractor = extractor ?? (config.PADDLEOCR_BASE_URL
+    ? createPaddleOcrPrimaryExtractor(
+        createPaddleOcrClient(config.PADDLEOCR_BASE_URL, fetch, config.PADDLEOCR_TIMEOUT_MS),
+        geminiExtractor,
+      )
+    : geminiExtractor);
 
   app.log.info(
     {
-      extraction: config.GEMINI_API_KEY || extractor ? 'enabled' : 'skipped',
+      extraction: config.PADDLEOCR_BASE_URL || config.GEMINI_API_KEY || extractor ? 'enabled' : 'skipped',
       model: receiptExtractor.model,
     },
     'receipt extraction configured',
