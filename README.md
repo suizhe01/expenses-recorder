@@ -103,7 +103,7 @@ starts half-configured.
 | `RECEIPTS_PATH` | no | `./data/receipts` | Directory receipt images are written to. Compose overrides it with the `receipts-data` volume |
 | `MAX_UPLOAD_BYTES` | no | `10485760` | Largest single receipt upload, in bytes |
 | `GEMINI_API_KEY` | no | — | Google AI Studio key. Unset (or empty) skips extraction; uploads still succeed |
-| `GEMINI_MODEL` | no | `gemini-2.5-flash` | Model receipts are read with, recorded on every attempt |
+| `GEMINI_MODEL` | no | `gemini-3.6-flash` | Model receipts are read with and recorded on every attempt. It must be a model this account can call; a 404 on every upload means the key cannot use the selected model |
 | `POSTGRES_USER` | no | `expenses` | Database user created by the Postgres container |
 | `POSTGRES_PASSWORD` | no | `expenses` | Password for that user. Local development only |
 | `POSTGRES_DB` | no | `expenses` | Database created by the Postgres container |

@@ -106,7 +106,7 @@ const configSchema = z.object({
   ),
   // AC-11. In config so a model upgrade needs no code change; recorded on every
   // attempt row so an old reading always says which model produced it.
-  GEMINI_MODEL: z.string().min(1).default('gemini-2.5-flash'),
+  GEMINI_MODEL: z.string().min(1).default('gemini-3.6-flash'),
 });
 
 export type Config = z.infer<typeof configSchema>;

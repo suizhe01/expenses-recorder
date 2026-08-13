@@ -11,6 +11,7 @@
   "scripts": {
     "lint": "npm run lint --workspace apps/api && npm run lint --workspace apps/web",
     "typecheck": "npm run typecheck --workspace apps/api && npm run typecheck --workspace apps/web",
+    "test:gemini-defaults": "node scripts/check-gemini-defaults.mjs",
     "test": "npm run test --workspace apps/api && npm run test --workspace apps/web",
     "migrate": "npm run migrate --workspace apps/api"
   }

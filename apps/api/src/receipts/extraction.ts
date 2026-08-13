@@ -116,17 +116,19 @@ export function parseAmountToCents(value: unknown): number | null {
 }
 
 /**
- * Rates for `gemini-2.5-flash`, in micros (millionths of a dollar) per token,
- * as published in August 2026: $0.30 per million input tokens and $2.50 per
- * million output.
+ * Rates for `gemini-3.6-flash`, in micros (millionths of a dollar) per token,
+ * as published in August 2026: $1.50 per million input tokens and $7.50 per
+ * million output. These constants are tied to the `GEMINI_MODEL` default:
+ * changing that model without changing these rates makes `cost_micros` wrong
+ * for every subsequent attempt.
  *
  * The cost this produces is an estimate and nothing depends on it. Google's
  * prices change and an attempt row is historical, so the token counts stored
  * alongside it are the durable truth — if these constants drift, past rows stay
  * meaningful and only the convenience figure is stale.
  */
-const INPUT_MICROS_PER_TOKEN = 0.3;
-const OUTPUT_MICROS_PER_TOKEN = 2.5;
+const INPUT_MICROS_PER_TOKEN = 1.5;
+const OUTPUT_MICROS_PER_TOKEN = 7.5;
 
 export function estimateCostMicros(
   promptTokens: number | null,

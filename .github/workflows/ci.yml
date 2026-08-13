@@ -95,6 +95,9 @@ jobs:
           # keeps the backfill from re-running over pending accounts.
           psql "$DATABASE_URL" -tAc "SELECT count(*) FROM email_verification_gate" | grep -qx '1'
 
+      - name: Check Gemini model defaults stay aligned
+        run: npm run test:gemini-defaults
+
       - name: Test
         run: npm run test --workspace apps/api
 
