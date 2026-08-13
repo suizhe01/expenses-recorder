@@ -351,7 +351,7 @@ describe('POST /expenses', () => {
     for (const [field, value] of [
       ['description', 'x'.repeat(501)],
       ['quantity', 'x'.repeat(51)],
-      ['unitPriceCents', -1],
+      ['unitPriceCents', 1.5],
       ['lineTotalCents', 1.5],
     ] as const) {
       const response = await create(token, await minimal(token, { items: [{ [field]: value }] }));
@@ -365,7 +365,7 @@ describe('POST /expenses', () => {
     for (const [field, value] of [
       ['description', 'x'.repeat(501)],
       ['quantity', 'x'.repeat(51)],
-      ['unitPriceCents', -1],
+      ['unitPriceCents', 1.5],
       ['lineTotalCents', 1.5],
     ] as const) {
       const response = await create(token, await minimal(token, {
@@ -458,7 +458,7 @@ describe('POST /expenses', () => {
     }
   });
 
-  it('AC-6: rejects negative components but accepts negative rounding', async () => {
+  it('EXP-50 AC-1 to AC-3: accepts signed lines but keeps charges and totals non-negative', async () => {
     const { token } = await account('components@example.com');
 
     for (const field of ['subtotalCents', 'taxCents'] as const) {
@@ -467,6 +467,12 @@ describe('POST /expenses', () => {
       expect(response.statusCode).toBe(400);
       expect(fields(response)).toHaveProperty(field);
     }
+
+    const stored = await anExpense(token, {
+      totalCents: 8849,
+      items: [{ description: 'FuelSave 95(Pump 4)', lineTotalCents: 16765, components: [{ description: 'BUDI95 Subsidy', lineTotalCents: -7916 }] }, { description: 'Voucher', unitPriceCents: -100, lineTotalCents: -100 }],
+    });
+    expect(stored.items).toEqual([{ description: 'FuelSave 95(Pump 4)', quantity: null, unitPriceCents: null, lineTotalCents: 16765, components: [{ description: 'BUDI95 Subsidy', quantity: null, unitPriceCents: null, lineTotalCents: -7916 }] }, { description: 'Voucher', quantity: null, unitPriceCents: -100, lineTotalCents: -100, components: [] }]);
 
     // Malaysian receipts round down as often as up.
     const rounded = await anExpense(token, { roundingCents: -2 });
