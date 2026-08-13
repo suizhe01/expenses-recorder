@@ -5,9 +5,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /service
 
-# OpenCV, pulled in by PaddleOCR, needs both OpenGL and GLib's thread runtime
+# OpenCV and PaddlePaddle need OpenGL, GLib's thread runtime, and GNU OpenMP
 # on a Debian slim image.
-RUN apt-get update && apt-get install --no-install-recommends -y libgl1 libglib2.0-0 && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install --no-install-recommends -y libgl1 libglib2.0-0 libgomp1 && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
