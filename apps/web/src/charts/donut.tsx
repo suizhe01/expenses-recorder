@@ -14,7 +14,20 @@ export function CategoryDonut({
   totalLabel,
   formatAmount = (cents) => `${cents.toLocaleString()} cents`,
 }: DonutProps) {
-  const [active, setActive] = useState<DonutSlice>();
+  /**
+   * The selected slice is held as an **id**, never as the slice object.
+   *
+   * Holding the object let a selection outlive the data it came from: switching
+   * month replaced `slices` but not `active`, so the centre label kept the old
+   * month's category and amount while `total` below recomputed for the new one.
+   * August's Food (RM 85.90) against July's RM 7.90 total rendered as "1087%".
+   *
+   * Deriving it from the current `slices` makes that unrepresentable — a
+   * selection that no longer exists simply falls back to the total label, and
+   * one that still exists always reads the current month's amount.
+   */
+  const [activeId, setActiveId] = useState<string>();
+  const active = slices.find((slice) => slice.id === activeId);
   if (slices.length === 0)
     return (
       <svg
@@ -70,13 +83,13 @@ export function CategoryDonut({
                 strokeDasharray={dash}
                 strokeDashoffset={currentOffset}
                 className="cursor-pointer transition-[stroke-width] hover:stroke-[18] focus:stroke-[18] motion-reduce:transition-none"
-                onMouseEnter={() => setActive(slice)}
-                onFocus={() => setActive(slice)}
-                onClick={() => setActive(slice)}
+                onMouseEnter={() => setActiveId(slice.id)}
+                onFocus={() => setActiveId(slice.id)}
+                onClick={() => setActiveId(slice.id)}
                 onKeyDown={(event) => {
                   if (event.key === "Enter" || event.key === " ") {
                     event.preventDefault();
-                    setActive(slice);
+                    setActiveId(slice.id);
                   }
                 }}
               />
