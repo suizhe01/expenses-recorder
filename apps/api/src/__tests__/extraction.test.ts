@@ -243,7 +243,9 @@ describe('mapping the model output', () => {
 
 describe('cost estimation', () => {
   it('AC-1: derives micros from token counts', () => {
-    expect(estimateCostMicros(1000, 100)).toBe(Math.round(1000 * 0.3 + 100 * 2.5));
+    expect(estimateCostMicros(1000, 100)).toBe(Math.round(1000 * 1.5 + 100 * 7.5));
+    expect(estimateCostMicros(1000, null)).toBe(1500);
+    expect(estimateCostMicros(null, 100)).toBe(750);
     expect(estimateCostMicros(null, null)).toBeNull();
   });
 });
