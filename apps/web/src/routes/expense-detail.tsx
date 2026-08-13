@@ -14,6 +14,7 @@ import { useSession } from '@/session/context';
 import { formatMoney } from '@/routes/expenses';
 import { formatPurchasedOn } from '@/routes/home';
 import { CLIENT_ROUTES } from '@/client-routes';
+import { CategoryIcon } from '@/components/category-icon';
 
 const NOT_FOUND = 'Expense not found';
 const transport = (url: string, init: RequestInit) => fetch(url, init);
@@ -196,8 +197,10 @@ export function ExpenseDetailScreen({ expensesApi, categoriesApi, receiptsApi }:
 /** AC-2. Every stored field, and nothing for the ones that are absent. */
 function Summary({ expense }: { expense: Expense }) {
   const money = (cents: number | null) => (cents === null ? null : formatMoney(cents, expense.currency));
-  const rows: [string, string | null][] = [
-    ['Category', expense.category.name],
+  // The Category value carries a node so it can show its icon; every other
+  // row stays a plain string, and the null-or-empty filter below is unchanged.
+  const rows: [string, React.ReactNode | null][] = [
+    ['Category', <span className="flex items-center gap-2"><CategoryIcon name={expense.category.name} className="size-4 shrink-0 text-muted-foreground" />{expense.category.name}</span>],
     ['Total', formatMoney(expense.totalCents, expense.currency)],
     ['Date', formatPurchasedOn(expense.purchasedOn)],
     ['Time', expense.purchasedAtTime?.slice(0, 5) ?? null],
