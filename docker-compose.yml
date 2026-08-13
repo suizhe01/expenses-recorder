@@ -67,6 +67,20 @@ services:
       # Note this means postgres-data alone is no longer a complete backup.
       - receipts-data:/data/receipts
 
+  # EXP-52: a local-only observation service. It deliberately has no production
+  # compose entry and is not wired into the API request path.
+  paddleocr:
+    profiles: ['ocr']
+    build:
+      context: ./services/paddleocr
+    ports:
+      - '${PADDLEOCR_PORT:-8008}:8008'
+    volumes:
+      # PaddleOCR downloads its official models on first use. Keeping its cache
+      # in a named volume makes subsequent starts offline and fast.
+      - paddleocr-models:/root/.paddlex
+
 volumes:
   postgres-data:
   receipts-data:
+  paddleocr-models:

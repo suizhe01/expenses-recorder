@@ -1,0 +1,7 @@
+fastapi==0.135.1
+uvicorn[standard]==0.41.0
+python-multipart==0.0.22
+# 3.2.2 is the current CPU wheel published for Linux arm64 (Docker Desktop on
+# Apple Silicon); PaddleOCR 3.7 also supports it.
+paddlepaddle==3.2.2
+paddleocr==3.7.0
