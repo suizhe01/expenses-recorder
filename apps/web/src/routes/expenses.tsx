@@ -23,6 +23,18 @@ export function monthKey(purchasedOn: string): string { return purchasedOn.slice
 export function monthLabel(key: string): string { const [year, month] = key.split('-'); return `${MONTHS[Number(month) - 1] ?? ''} ${year}`; }
 export function dayOfMonth(purchasedOn: string): string { return purchasedOn.slice(8, 10); }
 export function formatMoney(cents: number, currency: string): string { return `${currency === 'MYR' ? 'RM' : currency} ${(cents / 100).toFixed(2)}`; }
+function malaysiaDate(now: Date): string {
+  const values = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kuala_Lumpur', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(now);
+  const part = (type: Intl.DateTimeFormatPartTypes) => values.find((value) => value.type === type)?.value;
+  return `${part('year')}-${part('month')}-${part('day')}`;
+}
+export function taxArchiveFilters(year: number, today = malaysiaDate(new Date())): ExpenseFilters {
+  return { from: `${year}-01-01`, to: year === Number(today.slice(0, 4)) ? today : `${year}-12-31` };
+}
+export function taxArchiveYears(expenses: Expense[], currentYear = Number(malaysiaDate(new Date()).slice(0, 4))): number[] {
+  return [...new Set([currentYear, ...expenses.map((expense) => Number(expense.purchasedOn.slice(0, 4)))])].sort((left, right) => right - left);
+}
+export function taxArchiveRange(year: number): string { return `1 January ${year}–31 December ${year}`; }
 
 export function groupExpenses(expenses: Expense[]): { month: string; expenses: Expense[]; totals: Map<string, number> }[] {
   const groups = new Map<string, Expense[]>();
@@ -52,6 +64,7 @@ export function ExpensesScreen({ expensesApi, categoriesApi, exportsApi, csvDown
   const filters = filtersFromSearch(searchParams);
   const filterKey = `${filters.from ?? ''}|${filters.to ?? ''}|${filters.categoryId?.join(',') ?? ''}|${filters.hasReceipt ?? ''}`;
   const [expenses, setExpenses] = useState<Expense[]>([]);
+  const [archiveExpenses, setArchiveExpenses] = useState<Expense[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string>();
@@ -89,6 +102,9 @@ export function ExpensesScreen({ expensesApi, categoriesApi, exportsApi, csvDown
 
   useEffect(() => { void session.authorized((token) => categoryApi.list(token)).then((result) => { if (result.kind === 'ok') setCategories(result.body); }); }, [categoryApi, session]);
 
+  // Tax archive years must not be narrowed by the current list filters.
+  useEffect(() => { void session.authorized((token) => api.list(token, {})).then((result) => { if (result.kind === 'ok') setArchiveExpenses(result.body); }); }, [api, session]);
+
   const visible = expenses.filter((expense) => `${expense.merchantName ?? ''} ${expense.note ?? ''} ${expense.receiptNumber ?? ''}`.toLowerCase().includes(search.toLowerCase()));
   const active = filterCount(filters);
   const filtered = active > 0 || search.trim() !== '';
@@ -96,7 +112,7 @@ export function ExpensesScreen({ expensesApi, categoriesApi, exportsApi, csvDown
 
   return <main className="mx-auto min-h-dvh w-full max-w-xl overflow-x-hidden px-4 pb-[calc(5.5rem+env(safe-area-inset-bottom))]">
     <header className="border-b py-4 dark:border-border"><h1 className="font-heading text-lg font-semibold">Expenses</h1><p className="text-sm text-muted-foreground">Your filed expense archive</p></header>
-    <div className="flex gap-2 py-4"><div className="relative min-w-0 flex-1"><Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" /><Input aria-label="Search expenses" value={search} onChange={(event) => setSearch(event.target.value)} className="pl-9" placeholder="Search merchant, note or receipt" /></div><Filters filters={filters} categories={categories} count={active} onApply={(next) => setSearchParams(toSearch(next))} /><Export filters={filters} categories={categories} count={expenses.length} searchActive={search.trim() !== ''} api={exportApi} authorized={session.authorized} csvDownload={csvDownload} zipNavigate={zipNavigate} /></div>
+    <div className="flex gap-2 py-4"><div className="relative min-w-0 flex-1"><Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" /><Input aria-label="Search expenses" value={search} onChange={(event) => setSearch(event.target.value)} className="pl-9" placeholder="Search merchant, note or receipt" /></div><Filters filters={filters} categories={categories} count={active} onApply={(next) => setSearchParams(toSearch(next))} /><Export filters={filters} categories={categories} count={expenses.length} archiveExpenses={archiveExpenses} searchActive={search.trim() !== ''} api={exportApi} authorized={session.authorized} csvDownload={csvDownload} zipNavigate={zipNavigate} /></div>
     {typeof returnNotice === 'string' && <Alert className="mb-3"><AlertDescription>{returnNotice}</AlertDescription></Alert>}
     {error && <Alert variant="destructive" role="alert" className="mb-3"><AlertDescription>{error}</AlertDescription></Alert>}
     {deletedCategoryNotice && <Alert variant="destructive" role="alert" className="mb-3"><AlertDescription>That category was deleted</AlertDescription></Alert>}
@@ -121,13 +137,17 @@ function filterSummary(filters: ExpenseFilters, categories: Category[]): string 
   return parts.length ? parts.join('; ') : 'all expenses';
 }
 
-function Export({ filters, categories, count, searchActive, api, authorized, csvDownload, zipNavigate }: { filters: ExpenseFilters; categories: Category[]; count: number; searchActive: boolean; api: ExportsApi; authorized: ReturnType<typeof useSession>['session']['authorized']; csvDownload: typeof downloadCsv; zipNavigate: (url: string) => void }) {
+function Export({ filters, categories, count, archiveExpenses, searchActive, api, authorized, csvDownload, zipNavigate }: { filters: ExpenseFilters; categories: Category[]; count: number; archiveExpenses: Expense[]; searchActive: boolean; api: ExportsApi; authorized: ReturnType<typeof useSession>['session']['authorized']; csvDownload: typeof downloadCsv; zipNavigate: (url: string) => void }) {
   const [open, setOpen] = useState(false);
-  const [running, setRunning] = useState<'csv' | 'zip'>();
+  const [running, setRunning] = useState<'csv' | 'zip' | 'tax-zip'>();
   const [error, setError] = useState<string>();
   const [fields, setFields] = useState<Record<string, string>>({});
   const [notice, setNotice] = useState<string>();
+  const [taxYear, setTaxYear] = useState(() => Number(malaysiaDate(new Date()).slice(0, 4)));
   const summary = filterSummary(filters, categories);
+  const years = taxArchiveYears(archiveExpenses);
+  const archiveFilters = taxArchiveFilters(taxYear);
+  const archiveCount = archiveExpenses.filter((expense) => expense.purchasedOn >= archiveFilters.from! && expense.purchasedOn <= archiveFilters.to!).length;
   async function csv() {
     if (running) return;
     setRunning('csv'); setError(undefined); setFields({}); setNotice(undefined);
@@ -142,16 +162,16 @@ function Export({ filters, categories, count, searchActive, api, authorized, csv
     }
     setNotice("Download started. Check your browser's downloads.");
   }
-  async function zip() {
+  async function zip(kind: 'zip' | 'tax-zip', targetFilters: ExpenseFilters) {
     if (running) return;
-    setRunning('zip'); setError(undefined); setFields({}); setNotice(undefined);
+    setRunning(kind); setError(undefined); setFields({}); setNotice(undefined);
     const minted = await authorized((token) => api.createToken(token));
     setRunning(undefined);
     if (minted.kind !== 'ok') { setError('Could not start the download. Please try again.'); return; }
-    startZipDownload(minted.body.token, filters, zipNavigate);
+    startZipDownload(minted.body.token, targetFilters, zipNavigate);
     setNotice("Download started. Check your browser's downloads.");
   }
-  return <Sheet open={open} onOpenChange={setOpen}><SheetTrigger asChild><Button variant="outline" className="h-11 shrink-0" aria-label="Export expenses"><Download aria-hidden="true" />Export</Button></SheetTrigger><SheetContent><SheetHeader><SheetTitle>Export expenses</SheetTitle><SheetDescription>This export includes {summary}: {count} {count === 1 ? 'expense' : 'expenses'} currently visible from those filters.</SheetDescription></SheetHeader><div className="grid gap-3"><p className="text-sm text-muted-foreground">{searchActive ? 'Search text is not applied. The export covers the filters, not the search box.' : 'The export covers the active filters. Search text is never applied.'}</p>{count === 0 && <p className="text-sm text-muted-foreground">No expenses match these filters, but you can still export a header-only file.</p>}{error && <Alert variant="destructive" role="alert"><AlertDescription>{error}</AlertDescription>{Object.entries(fields).map(([field, message]) => <p key={field} className="mt-1 text-sm">{field}: {message}</p>)}</Alert>}{notice && <Alert><AlertDescription>{notice}</AlertDescription></Alert>}<Button className="h-11" disabled={running !== undefined} onClick={() => void csv()}>{running === 'csv' ? 'Starting CSV…' : 'Download CSV'}</Button><div className="rounded-xl border p-3 dark:border-border"><p className="font-medium">ZIP with receipt images</p><p className="mt-1 text-sm text-muted-foreground">Includes receipt images plus expenses.csv. This can be a large download.</p><Button variant="outline" className="mt-3 h-11 w-full" disabled={running !== undefined} onClick={() => void zip()}>{running === 'zip' ? 'Starting ZIP…' : 'Download ZIP'}</Button></div></div></SheetContent></Sheet>;
+  return <Sheet open={open} onOpenChange={setOpen}><SheetTrigger asChild><Button variant="outline" className="h-11 shrink-0" aria-label="Export expenses"><Download aria-hidden="true" />Export</Button></SheetTrigger><SheetContent><SheetHeader><SheetTitle>Export expenses</SheetTitle><SheetDescription>This export includes {summary}: {count} {count === 1 ? 'expense' : 'expenses'} currently visible from those filters.</SheetDescription></SheetHeader><div className="grid gap-3"><p className="text-sm text-muted-foreground">{searchActive ? 'Search text is not applied. The export covers the filters, not the search box.' : 'The export covers the active filters. Search text is never applied.'}</p>{count === 0 && <p className="text-sm text-muted-foreground">No expenses match these filters, but you can still export a header-only file.</p>}{error && <Alert variant="destructive" role="alert"><AlertDescription>{error}</AlertDescription>{Object.entries(fields).map(([field, message]) => <p key={field} className="mt-1 text-sm">{field}: {message}</p>)}</Alert>}{notice && <Alert><AlertDescription>{notice}</AlertDescription></Alert>}<Button className="h-11" disabled={running !== undefined} onClick={() => void csv()}>{running === 'csv' ? 'Starting CSV…' : 'Download CSV'}</Button><div className="rounded-xl border p-3 dark:border-border"><p className="font-medium">ZIP with receipt images</p><p className="mt-1 text-sm text-muted-foreground">Includes receipt images plus expenses.csv. This can be a large download.</p><Button variant="outline" className="mt-3 h-11 w-full" disabled={running !== undefined} onClick={() => void zip('zip', filters)}>{running === 'zip' ? 'Starting ZIP…' : 'Download ZIP'}</Button></div><div className="rounded-xl border p-3 dark:border-border"><p className="font-medium">Tax archive</p><p className="mt-1 text-sm text-muted-foreground">A calendar-year evidence archive of filed expenses and any attached receipt images. It is not tax advice or a filing submission.</p><label className="mt-3 grid gap-1 text-sm font-medium">Year of Assessment<select aria-label="Tax archive year" className="h-11 w-full rounded-lg border bg-transparent px-2.5 text-base" value={taxYear} onChange={(event) => setTaxYear(Number(event.target.value))}>{years.map((year) => <option key={year} value={year}>{year}</option>)}</select></label><p className="mt-3 text-sm text-muted-foreground">{taxArchiveRange(taxYear)} · {archiveCount === 0 ? 'No filed expenses in this year. A header-only archive will be downloaded.' : `${archiveCount} ${archiveCount === 1 ? 'filed expense' : 'filed expenses'} in this archive.`}</p><Button variant="outline" className="mt-3 h-11 w-full" disabled={running !== undefined} onClick={() => void zip('tax-zip', archiveFilters)}>{running === 'tax-zip' ? 'Starting tax archive…' : 'Download tax archive ZIP'}</Button></div></div></SheetContent></Sheet>;
 }
 
 // EXP-31 AC-1. The whole row is the link, matching the inbox row's anatomy.
