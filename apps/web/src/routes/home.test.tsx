@@ -87,6 +87,7 @@ describe('receipt inbox', () => {
     const unread = { ...created, extraction: { ...created.extraction!, status: 'failed' } };
     const http = await mount({ '/auth/login': { status: 200, body: session() }, '/receipts': [{ status: 200, body: [] }, { status: 201, body: unread }] });
     await userEvent.upload(await screen.findByLabelText('Add receipt'), new File(['jpeg'], 'lunch.jpg', { type: 'image/jpeg' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Use photo' }));
     const note = await screen.findByText("Saved. We couldn't read this one — you'll fill in the details yourself.");
     expect(note.parentElement).not.toHaveAttribute('role', 'alert');
     expect(screen.getByText('Needs details')).toBeInTheDocument();
@@ -99,6 +100,7 @@ describe('receipt inbox', () => {
   ])('distinguishes duplicate state', async (expenseId, message) => {
     await mount({ '/auth/login': { status: 200, body: session() }, '/receipts': [{ status: 200, body: [] }, { status: 200, body: { ...created, expenseId } }] });
     await userEvent.upload(await screen.findByLabelText('Add receipt'), new File(['jpeg'], 'lunch.jpg', { type: 'image/jpeg' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Use photo' }));
     expect(await screen.findByText(message)).toBeInTheDocument();
   });
 
@@ -113,6 +115,7 @@ describe('receipt inbox', () => {
     await manager.signIn('someone@example.com', 'password');
     const view = render(<SessionProvider manager={manager}><MemoryRouter><HomeScreen receiptsApi={createReceiptsApi(createClient('', transport))} /></MemoryRouter></SessionProvider>);
     await userEvent.upload(await screen.findByLabelText('Add receipt'), new File(['jpeg'], 'lunch.jpg', { type: 'image/jpeg' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Use photo' }));
     expect(await screen.findByText('Could not reach the server. Check your connection.')).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: 'Retry' }));
     await screen.findByText("You already have this receipt — it's already filed.");

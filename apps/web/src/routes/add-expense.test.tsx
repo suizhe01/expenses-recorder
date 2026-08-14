@@ -38,6 +38,7 @@ describe('add expense', () => {
     expect(camera).toHaveAttribute('accept', 'image/*');
     expect(screen.getByLabelText('Upload photo')).toHaveAttribute('accept', 'image/*');
     await userEvent.upload(screen.getByLabelText('Upload photo'), new File(['jpeg'], 'retry.jpg', { type: 'image/jpeg' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Use photo' }));
     expect(await screen.findByText('Could not reach the server. Check your connection.')).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: 'Retry' }));
     expect(await screen.findByRole('heading', { name: 'Confirm receipt' })).toBeInTheDocument();
@@ -55,6 +56,7 @@ describe('add expense', () => {
     }));
     await mount();
     await userEvent.upload(screen.getByLabelText('Upload photo'), new File(['jpeg'], 'duplicate.jpg', { type: 'image/jpeg' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Use photo' }));
     expect(await screen.findByText(notice)).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Add expense' })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Confirm receipt' })).not.toBeInTheDocument();
