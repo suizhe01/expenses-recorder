@@ -4,24 +4,28 @@ import type {
   ReceiptImage,
 } from './extraction.js';
 import type { PaddleOcrClient } from './paddleocr.js';
+import { toOcrTranscript } from './paddleocr.js';
 import { mapPaddleOcrLines } from './paddleocr-mapper.js';
 
 /**
- * Uses local OCR as a complete, deterministic reading. A well-formed OCR
- * response is success even when some fields are blank: Gemini must not fill
- * those blanks. Only an unavailable, failed, or malformed OCR response falls
- * through to Gemini.
+ * Gives Gemini the original image plus local OCR as supplementary context.
+ * Gemini remains the image-based source of truth. If it cannot return a valid
+ * reading after OCR succeeds, the deterministic local mapping is kept instead.
  */
-export function createPaddleOcrPrimaryExtractor(
+export function createPaddleOcrAssistedExtractor(
   paddleOcr: PaddleOcrClient,
   fallback: ReceiptExtractor,
 ): ReceiptExtractor {
   return {
-    model: 'PaddleOCR / Gemini fallback',
+    model: 'PaddleOCR-assisted Gemini',
     async extract(image: ReceiptImage): Promise<ExtractionResult> {
       const reading = await paddleOcr.read(image);
 
       if (reading) {
+        const result = await fallback.extract(image, toOcrTranscript(reading.lines));
+        if (result.status === 'succeeded') {
+          return { ...result, source: 'PaddleOCR-assisted Gemini' };
+        }
         return {
           status: 'succeeded',
           fields: mapPaddleOcrLines(reading.lines),

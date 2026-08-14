@@ -115,6 +115,16 @@ const configSchema = z.object({
       message: 'must be an absolute http:// URL',
     }).optional(),
   ),
+  // Explicitly opt in. A reachable service URL alone must not unexpectedly
+  // send a receipt to OCR, and the string "false" must stay false.
+  PADDLEOCR_ENABLED: z.preprocess(
+    (value) => (value === '' || value === undefined ? 'false' : value),
+    z
+      .enum(['true', 'false'], {
+        message: 'must be exactly "true" or "false"',
+      })
+      .transform((value) => value === 'true'),
+  ),
   PADDLEOCR_TIMEOUT_MS: z.coerce.number().int().positive().default(5_000),
 });
 

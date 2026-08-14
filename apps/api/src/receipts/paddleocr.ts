@@ -1,4 +1,4 @@
-import type { ReceiptImage } from './extraction.js';
+import type { OcrTranscript, ReceiptImage } from './extraction.js';
 
 export type OcrPoint = { x: number; y: number };
 
@@ -13,6 +13,21 @@ export type PaddleOcrResponse = { lines: PaddleOcrLine[] };
 export type PaddleOcrClient = {
   read: (image: ReceiptImage) => Promise<PaddleOcrResponse | null>;
 };
+
+/** Stable visual reading order for Gemini context: top-to-bottom, then left-to-right. */
+export function toOcrTranscript(lines: PaddleOcrLine[]): OcrTranscript {
+  return {
+    lines: [...lines]
+      .sort((a, b) => {
+        const topDifference = Math.min(...a.polygon.map((point) => point.y))
+          - Math.min(...b.polygon.map((point) => point.y));
+        if (topDifference !== 0) return topDifference;
+        return Math.min(...a.polygon.map((point) => point.x))
+          - Math.min(...b.polygon.map((point) => point.x));
+      })
+      .map(({ text, confidence, polygon }) => ({ text, confidence, polygon })),
+  };
+}
 
 type Fetch = typeof fetch;
 

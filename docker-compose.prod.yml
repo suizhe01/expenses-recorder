@@ -49,6 +49,7 @@ services:
       # Internal-only OCR service. It has no host port and is reached only on
       # Compose's private network by this API container.
       PADDLEOCR_BASE_URL: http://paddleocr:8008
+      PADDLEOCR_ENABLED: ${PADDLEOCR_ENABLED:-true}
       PADDLEOCR_TIMEOUT_MS: ${PADDLEOCR_TIMEOUT_MS:-5000}
       TZ: UTC
       # AC-4, AC-5. On here, unlike development: the Funnel is a reverse proxy,

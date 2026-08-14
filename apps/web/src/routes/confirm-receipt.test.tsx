@@ -39,7 +39,7 @@ afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 describe('confirm receipt', () => {
   const successfulRetry: Receipt = { ...receipt, extraction: { status: 'succeeded', isReceipt: true, merchantName: 'Retry Cafe', purchasedOn: '2026-08-12', totalCents: 1234, currency: 'MYR', items: [{ description: 'Tea', quantity: '1', unitPriceCents: 1234, lineTotalCents: 1234 }] } };
 
-  it('EXP-53 AC-7: identifies a local or fallback reading and keeps fields editable', async () => {
+  it('EXP-58 AC-3: identifies local, hybrid, or fallback readings and keeps fields editable', async () => {
     const local = { ...receipt, extraction: { ...receipt.extraction!, status: 'succeeded', source: 'PaddleOCR' as const, merchantName: 'Shell' } };
     const { view } = await mount(200, undefined, false, local);
     expect(await screen.findByText('Read locally with PaddleOCR.')).toBeInTheDocument();
@@ -49,6 +49,10 @@ describe('confirm receipt', () => {
     const fallback = { ...local, extraction: { ...local.extraction!, source: 'Gemini fallback' as const } };
     await mount(200, undefined, false, fallback);
     expect(await screen.findByText('Read with Gemini fallback.')).toBeInTheDocument();
+
+    const hybrid = { ...local, extraction: { ...local.extraction!, source: 'PaddleOCR-assisted Gemini' as const } };
+    await mount(200, undefined, false, hybrid);
+    expect(await screen.findByText('Read with PaddleOCR-assisted Gemini.')).toBeInTheDocument();
   });
 
   it('keeps a failed-image receipt savable and does not post without a category', async () => {

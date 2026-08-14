@@ -42,7 +42,7 @@ export type ExtractedFields = {
 };
 
 /** The provider that produced a successful reading shown to the user. */
-export type ExtractionSource = 'PaddleOCR' | 'Gemini fallback';
+export type ExtractionSource = 'PaddleOCR' | 'Gemini fallback' | 'PaddleOCR-assisted Gemini';
 
 export type ExtractionResult =
   | {
@@ -61,10 +61,19 @@ export type ReceiptImage = {
   contentType: string;
 };
 
+/** Local OCR context is request-scoped and is never persisted with an extraction. */
+export type OcrTranscript = {
+  lines: {
+    text: string;
+    confidence: number;
+    polygon: { x: number; y: number }[];
+  }[];
+};
+
 export type ReceiptExtractor = {
   /** Recorded on every attempt row, so an old reading says what produced it. */
   readonly model: string;
-  extract: (image: ReceiptImage) => Promise<ExtractionResult>;
+  extract: (image: ReceiptImage, ocr?: OcrTranscript) => Promise<ExtractionResult>;
 };
 
 /**
@@ -331,6 +340,8 @@ export type GeminiExtractorOptions = {
   apiKey: string;
   model: string;
   timeoutMs?: number;
+  /** Injectable only for tests; production uses the platform fetch implementation. */
+  fetcher?: typeof fetch;
 };
 
 type GeminiResponse = {
@@ -349,14 +360,15 @@ export function createGeminiExtractor({
   apiKey,
   model,
   timeoutMs = EXTRACTION_TIMEOUT_MS,
+  fetcher = fetch,
 }: GeminiExtractorOptions): ReceiptExtractor {
   return {
     model,
-    async extract({ bytes, contentType }: ReceiptImage): Promise<ExtractionResult> {
+    async extract({ bytes, contentType }: ReceiptImage, ocr?: OcrTranscript): Promise<ExtractionResult> {
       let response: Response;
 
       try {
-        response = await fetch(
+        response = await fetcher(
           `${ENDPOINT}/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`,
           {
             method: 'POST',
@@ -366,7 +378,11 @@ export function createGeminiExtractor({
               contents: [
                 {
                   parts: [
-                    { text: PROMPT },
+                    {
+                      text: ocr
+                        ? `${PROMPT}\n\nPaddleOCR transcript follows. It is supplementary evidence only: use the image as the source of truth when text, order, or values disagree.\n${JSON.stringify(ocr)}`
+                        : PROMPT,
+                    },
                     {
                       inline_data: {
                         mime_type: contentType,

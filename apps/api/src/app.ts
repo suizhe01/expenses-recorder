@@ -27,7 +27,7 @@ import {
   createSkippingExtractor,
   type ReceiptExtractor,
 } from './receipts/extraction.js';
-import { createPaddleOcrPrimaryExtractor } from './receipts/paddleocr-extractor.js';
+import { createPaddleOcrAssistedExtractor } from './receipts/paddleocr-extractor.js';
 import { createPaddleOcrClient } from './receipts/paddleocr.js';
 
 const require = createRequire(import.meta.url);
@@ -194,8 +194,8 @@ export function buildApp({
         model: config.GEMINI_MODEL,
       })
     : createSkippingExtractor(config.GEMINI_MODEL);
-  const receiptExtractor = extractor ?? (config.PADDLEOCR_BASE_URL
-    ? createPaddleOcrPrimaryExtractor(
+  const receiptExtractor = extractor ?? (config.PADDLEOCR_ENABLED && config.PADDLEOCR_BASE_URL
+    ? createPaddleOcrAssistedExtractor(
         createPaddleOcrClient(config.PADDLEOCR_BASE_URL, fetch, config.PADDLEOCR_TIMEOUT_MS),
         geminiExtractor,
       )
@@ -203,7 +203,9 @@ export function buildApp({
 
   app.log.info(
     {
-      extraction: config.PADDLEOCR_BASE_URL || config.GEMINI_API_KEY || extractor ? 'enabled' : 'skipped',
+      extraction: config.PADDLEOCR_ENABLED && config.PADDLEOCR_BASE_URL || config.GEMINI_API_KEY || extractor
+        ? 'enabled'
+        : 'skipped',
       model: receiptExtractor.model,
     },
     'receipt extraction configured',
