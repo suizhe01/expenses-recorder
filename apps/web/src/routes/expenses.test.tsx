@@ -6,7 +6,7 @@ import { createClient } from '@/api/client';
 import { expenseQuery, type Expense } from '@/api/expenses';
 import type { ExportsApi } from '@/api/exports';
 import type { DownloadResult } from '@/export/download';
-import { ExpensesScreen, groupExpenses, monthKey, monthLabel } from '@/routes/expenses';
+import { ExpensesScreen, groupExpenses, monthKey, monthLabel, taxArchiveFilters, taxArchiveRange, taxArchiveYears } from '@/routes/expenses';
 import { SessionProvider } from '@/session/context';
 import { createSessionManager } from '@/session/session';
 import { fakeStorage, session } from '@/test/support';
@@ -52,13 +52,19 @@ describe('expense list', () => {
     expect(expenseQuery({ from: '2026-08-01', categoryId: ['cat-1', 'cat-2'], hasReceipt: false })).toBe('?from=2026-08-01&categoryId=cat-1&categoryId=cat-2&hasReceipt=false');
   });
 
+  it('builds calendar-year archive options and filters without time-zone conversion', () => {
+    expect(taxArchiveYears([{ ...expenses[0]!, purchasedOn: '2024-12-31' }, { ...expenses[1]!, purchasedOn: '2026-01-01' }], 2026)).toEqual([2026, 2024]);
+    expect(taxArchiveFilters(2024)).toEqual({ from: '2024-01-01', to: '2024-12-31' });
+    expect(taxArchiveRange(2024)).toBe('1 January 2024–31 December 2024');
+  });
+
   it('searches locally without another request and exposes distinct empty states', async () => {
     const { calls } = await mount();
     expect(await screen.findByText('Kopitiam')).toBeInTheDocument();
-    expect(calls).toEqual(['']);
+    expect(calls).toEqual(['', '']);
     await userEvent.type(screen.getByRole('textbox', { name: 'Search expenses' }), 'no match');
     expect(await screen.findByText('No expenses match')).toBeInTheDocument();
-    expect(calls).toEqual(['']);
+    expect(calls).toEqual(['', '']);
     fireEvent.click(screen.getByRole('button', { name: /clear all/i }));
     expect(await screen.findByText('Kopitiam')).toBeInTheDocument();
   });
@@ -71,7 +77,7 @@ describe('expense list', () => {
     await userEvent.clear(screen.getByLabelText('From'));
     await userEvent.type(screen.getByLabelText('From'), '2026-08-01');
     await userEvent.click(screen.getByRole('button', { name: 'Apply filters' }));
-    await waitFor(() => expect(calls).toEqual(['', '?from=2026-08-01']));
+    await waitFor(() => expect(calls).toEqual(['', '', '?from=2026-08-01']));
     expect(screen.getByRole('navigation', { name: 'Main navigation' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /expenses/i })).toHaveAttribute('aria-current', 'page');
   });
@@ -98,13 +104,13 @@ describe('expense list', () => {
   it('keeps the deleted-category message visible while clearing only its URL filter', async () => {
     const { calls } = await mount(expenses, `${CLIENT_ROUTES.expenses}?from=2026-08-01&hasReceipt=false&categoryId=cat-deleted`, true);
     expect(await screen.findByText('That category was deleted')).toBeInTheDocument();
-    await waitFor(() => expect(calls).toEqual(['?from=2026-08-01&categoryId=cat-deleted&hasReceipt=false', '?from=2026-08-01&hasReceipt=false']));
+    await waitFor(() => expect(calls).toEqual(['?from=2026-08-01&categoryId=cat-deleted&hasReceipt=false', '', '?from=2026-08-01&hasReceipt=false']));
     expect(screen.getByText('That category was deleted')).toBeInTheDocument();
   });
 
   it('EXP-35 AC-1, AC-2, AC-8 and AC-11: explains filtered export scope and ZIP contents', async () => {
     await mount(expenses, `${CLIENT_ROUTES.expenses}?from=2026-08-01&hasReceipt=false`);
-    await screen.findByText('Kopitiam');
+    await screen.findAllByRole('link', { name: /Kopitiam/ });
     await userEvent.type(screen.getByRole('textbox', { name: 'Search expenses' }), 'Kopitiam');
     await userEvent.click(screen.getByRole('button', { name: 'Export expenses' }));
     expect(screen.getByText(/dates 2026-08-01 to today; expenses without receipts: 3 expenses/i)).toBeInTheDocument();
@@ -147,5 +153,29 @@ describe('expense list', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Download ZIP' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not start the download. Please try again.');
     expect(screen.getByRole('dialog')).toBeInTheDocument();
+  });
+
+  it('EXP-56 AC-1 through AC-6: downloads the selected calendar year separately from screen filters', async () => {
+    const mint = vi.fn(async () => ({ kind: 'ok' as const, status: 201, body: { token: 'download-token', expiresAt: '' } }));
+    const navigate = vi.fn();
+    const archiveRows = [...expenses, { ...expenses[0]!, id: 'older', purchasedOn: '2025-12-31' }];
+    await mount(archiveRows, `${CLIENT_ROUTES.expenses}?from=2026-08-01&hasReceipt=false`, false, { mint, navigate });
+    await screen.findAllByRole('link', { name: /Kopitiam/ });
+    await userEvent.click(screen.getByRole('button', { name: 'Export expenses' }));
+    expect(screen.getByText('Tax archive', { exact: true })).toBeInTheDocument();
+    expect(screen.getByText(/not tax advice or a filing submission/i)).toBeInTheDocument();
+    expect(screen.getByText(/1 January 2026–31 December 2026/i)).toBeInTheDocument();
+    await userEvent.selectOptions(screen.getByLabelText('Tax archive year'), '2025');
+    expect(screen.getByText(/1 January 2025–31 December 2025/i)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Download tax archive ZIP' }));
+    expect(mint).toHaveBeenCalledOnce();
+    expect(navigate).toHaveBeenCalledWith('/expenses/export.zip?from=2025-01-01&to=2025-12-31&token=download-token');
+  });
+
+  it('EXP-56 AC-6: explains that a selected empty year creates a header-only archive', async () => {
+    await mount([], CLIENT_ROUTES.expenses);
+    await screen.findByText('Nothing filed yet');
+    await userEvent.click(screen.getByRole('button', { name: 'Export expenses' }));
+    expect(screen.getByText(/No filed expenses in this year. A header-only archive will be downloaded./i)).toBeInTheDocument();
   });
 });
