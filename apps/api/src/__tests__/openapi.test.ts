@@ -65,6 +65,8 @@ describe('the OpenAPI document', () => {
       '/auth/reset-password',
       '/categories',
       '/categories/{id}',
+      '/merchant-corrections',
+      '/merchant-corrections/{id}',
       '/receipts',
       '/receipts/{id}',
       '/receipts/{id}/file',
@@ -235,12 +237,15 @@ describe('EXP-22: documented requests', () => {
     ['post', '/expenses'],
     ['patch', '/expenses/{id}'],
     ['post', '/receipts'],
+    ['post', '/merchant-corrections'],
+    ['patch', '/merchant-corrections/{id}'],
   ] as const;
 
   const DELETE_ROUTES = [
     '/categories/{id}',
     '/expenses/{id}',
     '/receipts/{id}',
+    '/merchant-corrections/{id}',
   ] as const;
 
   const FILTER_ROUTES = [
@@ -298,13 +303,13 @@ describe('EXP-22: documented requests', () => {
       // Nothing registered is missing from the map...
       expect(needing).toEqual(documented);
       // ...which, being an equality, also proves no entry names a dead route.
-      expect(needing.length).toBe(16);
+      expect(needing.length).toBe(19);
     } finally {
       await probe.close();
     }
   });
 
-  it('AC-3, AC-10: the twelve body-taking routes have a requestBody', () => {
+  it('AC-3, AC-10: every body-taking route has a requestBody', () => {
     for (const [method, path] of BODY_ROUTES) {
       const body = operation(path, method).requestBody;
 
@@ -312,7 +317,7 @@ describe('EXP-22: documented requests', () => {
     }
   });
 
-  it('AC-4, AC-10: the three DELETE routes have none', () => {
+  it('AC-4, AC-10: DELETE routes have no requestBody', () => {
     for (const path of DELETE_ROUTES) {
       expect(operation(path, 'delete').requestBody, path).toBeUndefined();
     }

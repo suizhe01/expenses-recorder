@@ -147,7 +147,7 @@ export function changedFields(initial: ExpenseFields, current: ExpenseFields, va
   return patch as ExpensePatch;
 }
 
-export function ExpenseForm({ fields, errors, categories, expanded, onToggleDetails, onChange, onSubmit, submitLabel, saving, canSubmit, footerExtra, detailsExtra }: {
+export function ExpenseForm({ fields, errors, categories, expanded, onToggleDetails, onChange, onSubmit, submitLabel, saving, canSubmit, footerExtra, detailsExtra, formId }: {
   fields: ExpenseFields;
   errors: Record<string, string>;
   categories: Category[];
@@ -160,8 +160,9 @@ export function ExpenseForm({ fields, errors, categories, expanded, onToggleDeta
   canSubmit: boolean;
   footerExtra?: ReactNode;
   detailsExtra?: ReactNode;
+  formId?: string;
 }) {
-  return <form onSubmit={onSubmit} className="grid gap-4">
+  return <form id={formId} onSubmit={onSubmit} className="grid gap-4">
     <Field label="Category" error={errors.categoryId}><select aria-label="Category" value={fields.categoryId} onChange={(event) => onChange('categoryId', event.target.value)} className="h-11 w-full rounded-lg border bg-background px-2.5 text-base"><option value="">Choose a category</option>{categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></Field>
     <Field label="Total" error={errors.totalCents}><Input aria-label="Total" inputMode="decimal" value={fields.total} onChange={(event) => onChange('total', event.target.value)} /></Field>
     <Field label="Date" error={errors.purchasedOn}><Input aria-label="Date" type="date" max={todayInMalaysia()} value={fields.purchasedOn} onChange={(event) => onChange('purchasedOn', event.target.value)} /></Field>

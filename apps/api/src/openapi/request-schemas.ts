@@ -104,6 +104,22 @@ const CATEGORY_NAME: JsonSchema = {
   example: { name: 'Coffee' },
 };
 
+/** A private merchant correction. Matching normalises case, spaces and punctuation. */
+const MERCHANT_CORRECTION: JsonSchema = {
+  type: 'object',
+  required: ['detectedName', 'merchantName', 'categoryId'],
+  properties: {
+    detectedName: { type: 'string', minLength: 1, description: 'The merchant text as it was detected.' },
+    merchantName: { type: 'string', minLength: 1, description: 'The merchant name to suggest.' },
+    categoryId: { type: 'string', format: 'uuid', description: 'A live category belonging to the signed-in user.' },
+  },
+  example: {
+    detectedName: 'POKEMIST (MALAYSIA)',
+    merchantName: 'Pokemist Malaysia',
+    categoryId: '00000000-0000-4000-8000-000000000000',
+  },
+};
+
 /** The tax-invoice fields an expense copies at confirm time. */
 const EXPENSE_PROPERTIES: Record<string, JsonSchema> = {
   categoryId: { type: 'string', format: 'uuid' },
@@ -231,10 +247,13 @@ export const REQUEST_SCHEMAS: Record<string, RequestEntry> = {
     consumes: ['multipart/form-data'],
     body: RECEIPT_UPLOAD,
   },
+  'POST /merchant-corrections': { body: MERCHANT_CORRECTION },
+  'PATCH /merchant-corrections/:id': { body: MERCHANT_CORRECTION },
   'POST /exports/token': NO_BODY,
   'DELETE /categories/:id': NO_BODY,
   'DELETE /expenses/:id': NO_BODY,
   'DELETE /receipts/:id': NO_BODY,
+  'DELETE /merchant-corrections/:id': NO_BODY,
 };
 
 /**

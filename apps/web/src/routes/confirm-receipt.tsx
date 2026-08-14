@@ -14,6 +14,7 @@ import { COLLAPSED_KEYS, ExpenseForm, validateExpense, type ExpenseFields } from
 import { useSession } from '@/session/context';
 import { centsToDecimal, decimalToCents, todayInMalaysia } from '@/lib/money';
 import { ItemsEditor, fieldsFromItem, type ItemFields, validateItems } from '@/components/items-editor';
+import { createMerchantCorrectionsApi, normalizeMerchant, type MerchantCorrection } from '@/api/merchant-corrections';
 
 const transport = (url: string, init: RequestInit) => fetch(url, init);
 
@@ -32,12 +33,14 @@ export function ConfirmReceiptScreen() {
   const receiptsApi = useMemo(() => createReceiptsApi(request), [request]);
   const categoriesApi = useMemo(() => createCategoriesApi(request), [request]);
   const expensesApi = useMemo(() => createExpensesApi(request), [request]);
+  const correctionsApi = useMemo(() => createMerchantCorrectionsApi(request), [request]);
   const [receipt,setReceipt]=useState<Receipt>(); const [categories,setCategories]=useState<Category[]>([]);
   const [fields,setFields]=useState<ExpenseFields>(); const [errors,setErrors]=useState<Record<string,string>>({});
   const [items,setItems]=useState<ItemFields[]>([]);
   const [image,setImage]=useState<string>(); const [imageBlob,setImageBlob]=useState<Blob>(); const [imageUnavailable,setImageUnavailable]=useState(false);
   const [expanded,setExpanded]=useState(false); const [saving,setSaving]=useState(false); const savingRef=useRef(false);
   const [fatal,setFatal]=useState<string>(); const [preview,setPreview]=useState(false); const [retrying,setRetrying]=useState(false); const retryingRef=useRef(false);
+  const [corrections,setCorrections]=useState<MerchantCorrection[]>([]); const [remember,setRemember]=useState(false); const saveChoiceRef=useRef<'ask'|'only'|'remember'>('ask');
   const [retryMessage,setRetryMessage]=useState<string>(); const [pendingReading,setPendingReading]=useState<Receipt>();
   const initialFields=useRef<ExpenseFields | undefined>(undefined); const initialItems=useRef<ItemFields[]>([]);
 
@@ -56,20 +59,21 @@ export function ConfirmReceiptScreen() {
     // form moved out — a component-local component made the compiler bail on
     // this file, taking the diagnostic with it.
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    void Promise.all([session.authorized((token)=>receiptsApi.list(token)),loadCategories()]).then(async ([result])=>{
+    void Promise.all([session.authorized((token)=>receiptsApi.list(token)),loadCategories(),session.authorized((token)=>correctionsApi.list(token))]).then(async ([result,,correctionResult])=>{
       if(cancelled)return;
       if(result.kind!=='ok'){ if(!(result.kind==='error'&&result.status===401))setFatal(describeFailure(result)); return; }
       const found=result.body.find((item)=>item.id===id);
       if(!found){ navigate('/',{replace:true,state:{notice:'Receipt not found'}}); return; }
       if(found.expenseId){ navigate('/',{replace:true,state:{notice:'That receipt has already been filed.'}}); return; }
       applyReading(found);
+      if(correctionResult.kind==='ok')setCorrections(correctionResult.body);
       const file=await session.authorized((token)=>receiptsApi.image(token,id)); if(cancelled)return;
       if(file.kind==='ok'){ objectUrl=URL.createObjectURL(file.body);setImage(objectUrl);setImageBlob(file.body); }
       else if(file.kind==='error'&&file.status===404)navigate('/',{replace:true,state:{notice:'Receipt not found'}}); else if(!(file.kind==='error'&&file.status===401))setImageUnavailable(true);
     }); return()=>{cancelled=true;if(objectUrl)URL.revokeObjectURL(objectUrl)};
   // APIs are stable memoized values; loadCategories intentionally belongs to this one-time route load.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[id,navigate,receiptsApi,session]);
+  },[correctionsApi,id,navigate,receiptsApi,session]);
 
   function change(name:keyof ExpenseFields,value:string){setFields((current)=>current?{...current,[name]:value}:current);setErrors((current)=>{const next={...current};delete next[name];return next})}
   function hasEdits() { return JSON.stringify(fields) !== JSON.stringify(initialFields.current) || JSON.stringify(items) !== JSON.stringify(initialItems.current); }
@@ -93,7 +97,8 @@ export function ConfirmReceiptScreen() {
     }
     if(!(result.kind==='error'&&result.status===401))setRetryMessage(retryFailureMessage(result));
   }
-  async function save(event:FormEvent){event.preventDefault();if(savingRef.current||!fields)return;const checked=validateExpense(fields);const itemChecked=validateItems(items);setErrors({...checked.errors,...itemChecked.errors});if(!checked.values||!itemChecked.values)return;const body={...checked.values,items:itemChecked.values,receiptId:id};savingRef.current=true;setSaving(true);const result=await session.authorized((token)=>expensesApi.create(token,body));
+  const detected=receipt?.extraction?.merchantName ?? ''; const suggestion=detected?corrections.find((rule)=>normalizeMerchant(rule.detectedName)===normalizeMerchant(detected)):undefined;
+  async function save(event:FormEvent){event.preventDefault();if(savingRef.current||!fields)return;const choice=saveChoiceRef.current;saveChoiceRef.current='ask';const checked=validateExpense(fields);const itemChecked=validateItems(items);setErrors({...checked.errors,...itemChecked.errors});if(!checked.values||!itemChecked.values)return; const covered=Boolean(suggestion&&suggestion.merchantName===fields.merchantName&&suggestion.categoryId===fields.categoryId); if(detected&&(fields.merchantName.trim()!==detected.trim()||fields.categoryId!==suggestion?.categoryId)&&!covered&&choice==='ask'){setRemember(true);return;} const body={...checked.values,items:itemChecked.values,receiptId:id};savingRef.current=true;setSaving(true);if(choice==='remember'&&detected){const correction={detectedName:detected,merchantName:fields.merchantName,categoryId:fields.categoryId};const correctionResult=await session.authorized((token)=>suggestion?correctionsApi.update(token,suggestion.id,correction):correctionsApi.create(token,correction));if(correctionResult.kind!=='ok'){savingRef.current=false;setSaving(false);setErrors({form:'Could not save merchant correction. Your expense has not been filed.'});return;}}const result=await session.authorized((token)=>expensesApi.create(token,body));
     if(result.kind==='ok'){const category=categories.find((item)=>item.id===fields!.categoryId)?.name??'category';const subject=fields!.merchantName||receipt?.originalFilename||'Receipt';navigate('/',{replace:true,state:{notice:`Filed ${subject}, RM ${Number(fields!.total).toFixed(2)} under ${category}.`}});return;}
     savingRef.current=false;setSaving(false);if(result.kind==='error'&&result.status===400&&result.fields){setErrors(result.fields);if(Object.keys(result.fields).some((key)=>COLLAPSED_KEYS.has(key)))setExpanded(true);}
     else if(result.kind==='error'&&result.status===422&&result.message==='Category not found'){await loadCategories();setErrors({categoryId:'That category is no longer available. Choose another.'});}
@@ -108,15 +113,17 @@ export function ConfirmReceiptScreen() {
   return <main className="mx-auto min-h-dvh w-full max-w-xl px-4 pb-28"><header className="flex items-center gap-2 py-3"><Button type="button" variant="ghost" size="icon" className="size-11" onClick={()=>navigate('/')} aria-label="Back"><ChevronLeft/></Button><h1 className="font-heading text-lg font-semibold">Confirm receipt</h1></header>
     {image?<button type="button" className="mb-5 block min-h-44 w-full overflow-hidden rounded-xl bg-muted" onClick={()=>setPreview(true)}><img className="max-h-80 w-full object-contain" src={image} alt="Receipt"/></button>:imageUnavailable?<div className="mb-5 flex min-h-44 items-center justify-center rounded-xl bg-muted text-sm text-muted-foreground">Receipt image is unavailable</div>:null}
     {e?.source&&<p className="mb-4 text-sm text-muted-foreground">{e.source==='PaddleOCR'?'Read locally with PaddleOCR.':'Read with Gemini fallback.'}</p>}
+    {suggestion&&<Alert className="mb-4"><AlertDescription>Saved correction: {suggestion.merchantName}{suggestion.categoryActive?` · ${suggestion.categoryName}`:' · Saved category is unavailable; choose a category.'}<Button type="button" variant="outline" className="ml-2" onClick={()=>{change('merchantName',suggestion.merchantName);if(suggestion.categoryActive)change('categoryId',suggestion.categoryId);}}>Use saved correction</Button></AlertDescription></Alert>}
     {unread&&<div className="mb-4 flex flex-wrap items-center gap-2"><p className="text-sm text-muted-foreground">We couldn't read this receipt — enter the details yourself.</p>{imageBlob&&<Button type="button" variant="outline" className="h-11" disabled={retrying} onClick={()=>void retryReading()}>{retrying?'Trying again…':'Try again'}</Button>}</div>}
     {retryMessage&&<Alert variant="destructive" className="mb-4" role="alert"><AlertDescription>{retryMessage}</AlertDescription></Alert>}
     {e?.isReceipt===false&&<Alert className="mb-4"><AlertDescription>This doesn't look like a receipt. Check the photo before saving.</AlertDescription></Alert>}
     {errors.form&&<Alert variant="destructive" className="mb-4" role="alert"><AlertDescription>{errors.form}</AlertDescription></Alert>}
-    <ExpenseForm fields={fields} errors={errors} categories={categories} expanded={expanded} onToggleDetails={()=>setExpanded(x=>!x)} onChange={change} onSubmit={save} submitLabel="Save expense" saving={saving} canSubmit={Boolean(fields.categoryId)} detailsExtra={items.length===0?<ItemsEditor items={items} setItems={setItems} errors={errors} clearItemErrors={()=>setErrors(current=>Object.fromEntries(Object.entries(current).filter(([key])=>!key.startsWith('items.'))))}/>:undefined}/>
+    <ExpenseForm formId="confirm-expense-form" fields={fields} errors={errors} categories={categories} expanded={expanded} onToggleDetails={()=>setExpanded(x=>!x)} onChange={change} onSubmit={save} submitLabel="Save expense" saving={saving} canSubmit={Boolean(fields.categoryId)} detailsExtra={items.length===0?<ItemsEditor items={items} setItems={setItems} errors={errors} clearItemErrors={()=>setErrors(current=>Object.fromEntries(Object.entries(current).filter(([key])=>!key.startsWith('items.'))))}/>:undefined}/>
     {items.length>0&&(
       <ItemsEditor items={items} setItems={setItems} errors={errors} targetCents={reconciliationTarget} targetName={fields.subtotal.trim()?'subtotal':'total'} clearItemErrors={()=>setErrors(current=>Object.fromEntries(Object.entries(current).filter(([key])=>!key.startsWith('items.'))))}/>
     )}
     {preview&&image&&<div className="fixed inset-0 z-50 flex bg-black/90 p-4" role="dialog" aria-modal="true"><button className="absolute right-4 top-4 min-h-11 rounded-lg bg-white px-4 text-black" onClick={()=>setPreview(false)}>Close</button><img className="m-auto max-h-full max-w-full object-contain" src={image} alt="Receipt full screen"/></div>}
     <Dialog open={Boolean(pendingReading)} onOpenChange={(open)=>{if(!open)setPendingReading(undefined)}}><DialogContent><DialogHeader><DialogTitle>Replace typed values?</DialogTitle><DialogDescription>A new reading is ready. Applying it will replace the values you typed.</DialogDescription></DialogHeader><DialogFooter><Button type="button" variant="outline" onClick={()=>setPendingReading(undefined)}>Cancel</Button><Button type="button" onClick={()=>{if(pendingReading)applyReading(pendingReading);setPendingReading(undefined)}}>Replace values</Button></DialogFooter></DialogContent></Dialog>
+    <Dialog open={remember} onOpenChange={setRemember}><DialogContent><DialogHeader><DialogTitle>Remember this correction?</DialogTitle><DialogDescription>Save this merchant and category suggestion for the detected name “{detected}”?</DialogDescription></DialogHeader><DialogFooter><Button type="button" variant="outline" onClick={()=>{saveChoiceRef.current='only';setRemember(false);(document.getElementById('confirm-expense-form') as HTMLFormElement | null)?.requestSubmit();}}>Save only</Button><Button type="button" onClick={()=>{saveChoiceRef.current='remember';setRemember(false);(document.getElementById('confirm-expense-form') as HTMLFormElement | null)?.requestSubmit();}}>Save and remember</Button></DialogFooter></DialogContent></Dialog>
     </main>;
 }
