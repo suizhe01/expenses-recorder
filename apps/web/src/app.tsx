@@ -11,6 +11,7 @@ import { ExpenseDetailScreen } from '@/routes/expense-detail';
 import { SettingsScreen } from '@/routes/settings';
 import { CategoriesScreen } from '@/routes/categories';
 import { AddExpenseScreen } from '@/routes/add-expense';
+import { MerchantCorrectionsScreen } from '@/routes/merchant-corrections';
 
 /**
  * The route table plus the signed-in/signed-out split.
@@ -48,6 +49,7 @@ export function Routing() {
       <Route path={CLIENT_ROUTES.expenseDetail} element={signedIn ? <ExpenseDetailScreen /> : <Navigate to={CLIENT_ROUTES.signIn} replace />} />
       <Route path={CLIENT_ROUTES.settings} element={signedIn ? <SettingsScreen /> : <Navigate to={CLIENT_ROUTES.signIn} replace />} />
       <Route path={CLIENT_ROUTES.categories} element={signedIn ? <CategoriesScreen /> : <Navigate to={CLIENT_ROUTES.signIn} replace />} />
+      <Route path={CLIENT_ROUTES.merchantCorrections} element={signedIn ? <MerchantCorrectionsScreen /> : <Navigate to={CLIENT_ROUTES.signIn} replace />} />
       <Route
         path={CLIENT_ROUTES.signUp}
         element={signedIn ? <Navigate to={CLIENT_ROUTES.home} replace /> : <SignUpScreen />}

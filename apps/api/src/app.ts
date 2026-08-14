@@ -13,6 +13,7 @@ import { registerAuthRoutes } from './routes/auth.js';
 import { registerVerifyRoute } from './routes/verify.js';
 import { registerResetPasswordRoutes } from './routes/reset-password.js';
 import { registerCategoryRoutes } from './routes/categories.js';
+import { registerMerchantCorrectionRoutes } from './routes/merchant-corrections.js';
 import { registerReceiptRoutes } from './routes/receipts.js';
 import { registerExpenseRoutes } from './routes/expenses.js';
 import { registerExportTokenRoute } from './routes/exports.js';
@@ -158,6 +159,7 @@ export function buildApp({
         { name: 'Health', description: 'Liveness and database connectivity' },
         { name: 'Auth', description: 'Registration, sessions, verification, password reset' },
         { name: 'Categories', description: 'User-owned expense categories' },
+        { name: 'Merchant corrections', description: 'Private merchant and category suggestions' },
         { name: 'Receipts', description: 'Receipt images' },
         { name: 'Expenses', description: 'Recorded expenses, with or without a receipt' },
       ],
@@ -229,6 +231,9 @@ export function buildApp({
   // /health, which must stay unauthenticated.
   app.register(async (scope) => {
     registerCategoryRoutes(scope, { database });
+  });
+  app.register(async (scope) => {
+    registerMerchantCorrectionRoutes(scope, { database });
   });
 
   // EXP-16 AC-20: its own encapsulated scope, for the same two reasons as

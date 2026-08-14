@@ -22,6 +22,7 @@ export const CLIENT_ROUTES = {
   expenseDetail: '/expense/:expenseId',
   settings: '/settings',
   categories: '/settings/categories',
+  merchantCorrections: '/settings/merchant-corrections',
   confirmReceipt: '/confirm/:receiptId',
   add: '/add',
   catchAll: '*',

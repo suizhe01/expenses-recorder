@@ -167,6 +167,7 @@ describe('confirm receipt', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Add item' }));
     expect(screen.queryByText(/Item line totals do not match/)).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: 'Save expense' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Save only' }));
     await waitFor(() => expect(calls).toContain('POST /expenses'));
     const request = (fetch as ReturnType<typeof vi.fn>).mock.calls.find(([url, init]) => new URL(url, 'http://test.local').pathname === '/expenses' && init?.method === 'POST');
     expect(JSON.parse((request?.[1] as RequestInit).body as string).items).toEqual([
@@ -203,6 +204,7 @@ describe('confirm receipt', () => {
     expect(screen.getByText(/Item line totals do not match/)).toBeInTheDocument();
     await userEvent.selectOptions(screen.getByLabelText('Category'), category.id);
     await userEvent.click(screen.getByRole('button', { name: 'Save expense' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Save only' }));
     await waitFor(() => expect(calls).toContain('POST /expenses'));
     const request = (fetch as ReturnType<typeof vi.fn>).mock.calls.find(([url, init]) => new URL(url, 'http://test.local').pathname === '/expenses' && init?.method === 'POST');
     expect(JSON.parse((request?.[1] as RequestInit).body as string).items).toEqual([{ description: 'Cajun Chicken', quantity: '3', unitPriceCents: 1790, lineTotalCents: 5370, components: [{ description: 'Add Rice', quantity: '2', unitPriceCents: 100, lineTotalCents: 100 }] }]);
@@ -222,6 +224,7 @@ describe('confirm receipt', () => {
     await userEvent.type(screen.getByLabelText('Component 1 unit price'), '1.00');
     expect(screen.queryByText('Use a valid amount with no more than 2 decimal places.')).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: 'Save expense' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Save only' }));
     await waitFor(() => expect(calls).toContain('POST /expenses'));
     const request = (fetch as ReturnType<typeof vi.fn>).mock.calls.find(([url, init]) => new URL(url, 'http://test.local').pathname === '/expenses' && init?.method === 'POST');
     expect(JSON.parse((request?.[1] as RequestInit).body as string).items).toEqual([{ description: null, quantity: null, unitPriceCents: null, lineTotalCents: null, components: [{ description: 'Soup', quantity: null, unitPriceCents: 100, lineTotalCents: null }] }]);
