@@ -12,6 +12,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
 import { TabBar } from '@/components/tab-bar';
+import { ReceiptQualityReview } from '@/components/receipt-quality-review';
 
 const MAX_BYTES = 10 * 1024 * 1024;
 const ALLOWED_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif']);
@@ -45,6 +46,7 @@ export function HomeScreen({ receiptsApi }: { receiptsApi?: ReceiptsApi } = {}) 
   const [loading, setLoading] = useState(true);
   const [listError, setListError] = useState<string>();
   const [file, setFile] = useState<File>();
+  const [reviewing, setReviewing] = useState<File>();
   const [preview, setPreview] = useState<string>();
   const [uploading, setUploading] = useState(false);
   const [notice, setNotice] = useState<Notice>();
@@ -80,9 +82,8 @@ export function HomeScreen({ receiptsApi }: { receiptsApi?: ReceiptsApi } = {}) 
       setNotice({ text: 'Must be a JPEG, PNG, WebP or HEIC image.', alert: true });
       return;
     }
-    setFile(next);
+    setReviewing(next);
     setPreview(URL.createObjectURL(next));
-    void upload(next);
   }
 
   async function upload(next: File) {
@@ -163,6 +164,7 @@ export function HomeScreen({ receiptsApi }: { receiptsApi?: ReceiptsApi } = {}) 
           </div>
         </div>
       </section>
+      <ReceiptQualityReview file={reviewing} onUse={(next) => { setReviewing(undefined); setFile(next); void upload(next); }} onRetake={() => { setReviewing(undefined); discard(); }} />
       <TabBar active="inbox" capture={false} />
 
       <Dialog open={deleting !== undefined} onOpenChange={(open) => { if (!open) { setDeleting(undefined); setDeleteError(undefined); } }}>
