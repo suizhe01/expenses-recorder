@@ -38,6 +38,9 @@ services:
       MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-10485760}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.6-flash}
+      PADDLEOCR_BASE_URL: ${PADDLEOCR_BASE_URL:-}
+      PADDLEOCR_ENABLED: ${PADDLEOCR_ENABLED:-false}
+      PADDLEOCR_TIMEOUT_MS: ${PADDLEOCR_TIMEOUT_MS:-5000}
       # EXP-17 AC-5. The container already ran UTC, but only as Docker's default
       # — nothing said so, and nothing stopped a future deploy from setting local
       # time. Date-only columns are converted in SQL now, so this is no longer

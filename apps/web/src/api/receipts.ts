@@ -3,7 +3,7 @@ import type { ExpenseItem } from './expenses';
 
 export type Extraction = {
   status: string;
-  source?: 'PaddleOCR' | 'Gemini fallback' | null;
+  source?: 'PaddleOCR' | 'Gemini fallback' | 'PaddleOCR-assisted Gemini' | null;
   isReceipt?: boolean | null;
   merchantName: string | null;
   merchantTaxId?: string | null;

@@ -17,6 +17,7 @@ describe('parseConfig', () => {
     expect(config.NODE_ENV).toBe('development');
     expect(config.LOG_LEVEL).toBe('info');
     expect(config.PADDLEOCR_BASE_URL).toBeUndefined();
+    expect(config.PADDLEOCR_ENABLED).toBe(false);
     expect(config.PADDLEOCR_TIMEOUT_MS).toBe(5000);
   });
 
@@ -24,10 +25,16 @@ describe('parseConfig', () => {
     const config = parseConfig({
       ...validEnv,
       PADDLEOCR_BASE_URL: 'http://paddleocr:8008',
+      PADDLEOCR_ENABLED: 'true',
       PADDLEOCR_TIMEOUT_MS: '4000',
     });
     expect(config.PADDLEOCR_BASE_URL).toBe('http://paddleocr:8008');
+    expect(config.PADDLEOCR_ENABLED).toBe(true);
     expect(config.PADDLEOCR_TIMEOUT_MS).toBe(4000);
+  });
+
+  it('keeps the explicit PaddleOCR off switch false', () => {
+    expect(parseConfig({ ...validEnv, PADDLEOCR_ENABLED: 'false' }).PADDLEOCR_ENABLED).toBe(false);
   });
 
   // AC-5: a missing required variable is rejected and named.

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ReceiptExtractor } from '../receipts/extraction.js';
-import { createPaddleOcrPrimaryExtractor } from '../receipts/paddleocr-extractor.js';
+import { createPaddleOcrAssistedExtractor } from '../receipts/paddleocr-extractor.js';
 import type { PaddleOcrClient, PaddleOcrLine } from '../receipts/paddleocr.js';
 
 const image = { bytes: Buffer.from('receipt'), contentType: 'image/jpeg' };
@@ -25,16 +25,26 @@ function fallback(): ReceiptExtractor {
   };
 }
 
-describe('PaddleOCR primary extractor', () => {
-  it('EXP-53 AC-2, AC-3: accepts partial local OCR without invoking Gemini', async () => {
+describe('PaddleOCR-assisted Gemini extractor', () => {
+  it('EXP-58 AC-1 to AC-3: sends a visual-order OCR transcript to Gemini and records the hybrid source', async () => {
     const gemini = fallback();
-    const paddle: PaddleOcrClient = { read: vi.fn(async () => ({ lines: [line] })) };
-    const result = await createPaddleOcrPrimaryExtractor(paddle, gemini).extract(image);
+    const laterLine = {
+      ...line,
+      text: 'MERCHANT',
+      polygon: [{ x: 0, y: 30 }, { x: 100, y: 30 }, { x: 100, y: 50 }, { x: 0, y: 50 }] as PaddleOcrLine['polygon'],
+    };
+    const paddle: PaddleOcrClient = { read: vi.fn(async () => ({ lines: [laterLine, line] })) };
+    const result = await createPaddleOcrAssistedExtractor(paddle, gemini).extract(image);
 
     expect(result).toMatchObject({
-      status: 'succeeded', source: 'PaddleOCR', fields: { totalCents: 1234, merchantTaxId: null },
+      status: 'succeeded', source: 'PaddleOCR-assisted Gemini', fields: { totalCents: 999 },
     });
-    expect(gemini.extract).not.toHaveBeenCalled();
+    expect(gemini.extract).toHaveBeenCalledWith(image, {
+      lines: [
+        { text: 'TOTAL RM12.34', confidence: 0.99, polygon: line.polygon },
+        { text: 'MERCHANT', confidence: 0.99, polygon: laterLine.polygon },
+      ],
+    });
   });
 
   it.each(['unavailable', 'timeout', 'non-success', 'malformed'])(
@@ -42,22 +52,22 @@ describe('PaddleOCR primary extractor', () => {
     async () => {
       const gemini = fallback();
       const paddle: PaddleOcrClient = { read: vi.fn(async () => null) };
-      const result = await createPaddleOcrPrimaryExtractor(paddle, gemini).extract(image);
+      const result = await createPaddleOcrAssistedExtractor(paddle, gemini).extract(image);
 
       expect(result).toMatchObject({ status: 'succeeded', source: 'Gemini fallback' });
       expect(gemini.extract).toHaveBeenCalledWith(image);
     },
   );
 
-  it('EXP-53 AC-5: preserves a failed Gemini fallback', async () => {
-    const paddle: PaddleOcrClient = { read: async () => null };
+  it('EXP-58 AC-5: keeps the deterministic local map when assisted Gemini fails', async () => {
+    const paddle: PaddleOcrClient = { read: async () => ({ lines: [line] }) };
     const gemini: ReceiptExtractor = {
       model: 'gemini-test',
       extract: async () => ({ status: 'failed', error: 'fallback unavailable' }),
     };
 
-    await expect(createPaddleOcrPrimaryExtractor(paddle, gemini).extract(image)).resolves.toEqual({
-      status: 'failed', error: 'fallback unavailable',
+    await expect(createPaddleOcrAssistedExtractor(paddle, gemini).extract(image)).resolves.toMatchObject({
+      status: 'succeeded', source: 'PaddleOCR', fields: { totalCents: 1234, merchantTaxId: null },
     });
   });
 });

@@ -77,7 +77,7 @@ export function toExtraction(row: ExtractionRow): Extraction {
     // Existing rows retain their original Gemini model name and intentionally
     // have no source. New coordinated rows persist the user-facing source in
     // the existing per-attempt model column, without rewriting history.
-    source: row.model === 'PaddleOCR' || row.model === 'Gemini fallback' ? row.model : null,
+    source: row.model === 'PaddleOCR' || row.model === 'Gemini fallback' || row.model === 'PaddleOCR-assisted Gemini' ? row.model : null,
     isReceipt: row.is_receipt,
     // numeric comes back as a string from pg to avoid float loss.
     confidence: row.confidence === null ? null : Number(row.confidence),
