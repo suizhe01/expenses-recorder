@@ -36,6 +36,18 @@ function monthChoices(expenses: Expense[], selected: string): string[] {
     .reverse();
 }
 
+export function receiptReviewReason(receipt: Receipt): string | null {
+  const extraction = receipt.extraction;
+
+  if (!extraction || extraction.status === 'failed' || extraction.status === 'skipped') {
+    return "Couldn't read receipt";
+  }
+  if (extraction.isReceipt === false) return "Doesn't look like a receipt";
+  if (!extraction.purchasedOn) return 'Missing date';
+  if (extraction.totalCents === null || extraction.totalCents === undefined) return 'Missing total';
+  return null;
+}
+
 export function OverviewScreen({
   expensesApi,
   receiptsApi,
@@ -92,6 +104,8 @@ export function OverviewScreen({
   const overview = overviewFor(expenses, month, currency);
   const visible = overview;
   const slices = visible ? donutSlices(visible.categories) : [];
+  const reviewReceipts = receipts.filter((receipt) => receiptReviewReason(receipt) !== null);
+  const readyReceipts = receipts.filter((receipt) => receiptReviewReason(receipt) === null);
   async function remove() {
     if (!deleting) return;
     setDeleteError(undefined);
@@ -232,11 +246,25 @@ export function OverviewScreen({
           </section>
         </>
       )}
-      {receipts.length > 0 && (
-        <section className="mt-5">
-          <h2 className="mb-2 font-semibold">{receipts.length} to file</h2>
+      {reviewReceipts.length > 0 && (
+        <section className="mt-5" aria-labelledby="needs-review-heading">
+          <h2 id="needs-review-heading" className="mb-2 font-semibold">{reviewReceipts.length} needs review</h2>
           <div className="grid gap-2">
-            {receipts.map((receipt) => <div key={receipt.id} className="flex min-w-0 items-center gap-2 rounded-lg border p-1 dark:border-border">
+            {reviewReceipts.map((receipt) => <div key={receipt.id} className="flex min-w-0 items-center gap-2 rounded-lg border p-1 dark:border-border">
+              <Link to={confirmReceiptPath(receipt.id)} className="flex min-h-11 min-w-0 flex-1 items-center justify-between gap-3 rounded-md px-2">
+                <span className="min-w-0"><span className="block truncate font-medium">{receipt.extraction?.merchantName ?? receipt.originalFilename ?? "Receipt"}</span><span className="block truncate text-sm text-muted-foreground">{receiptReviewReason(receipt)}</span></span>
+                <span className="shrink-0 text-sm text-muted-foreground">Review</span>
+              </Link>
+              <Button type="button" variant="ghost" size="icon" className="size-11 shrink-0" aria-label={`Delete ${receipt.originalFilename ?? "receipt"}`} onClick={() => { setDeleting(receipt); setDeleteError(undefined); }}><Trash2 aria-hidden="true" /></Button>
+            </div>)}
+          </div>
+        </section>
+      )}
+      {readyReceipts.length > 0 && (
+        <section className="mt-5" aria-labelledby="to-file-heading">
+          <h2 id="to-file-heading" className="mb-2 font-semibold">{readyReceipts.length} to file</h2>
+          <div className="grid gap-2">
+            {readyReceipts.map((receipt) => <div key={receipt.id} className="flex min-w-0 items-center gap-2 rounded-lg border p-1 dark:border-border">
               <Link to={confirmReceiptPath(receipt.id)} className="flex min-h-11 min-w-0 flex-1 items-center justify-between gap-3 rounded-md px-2">
                 <span className="truncate font-medium">{receipt.extraction?.merchantName ?? receipt.originalFilename ?? "Receipt"}</span>
                 <span className="shrink-0 text-sm text-muted-foreground">File receipt</span>
