@@ -61,4 +61,17 @@ describe('add expense', () => {
     expect(screen.getByRole('heading', { name: 'Add expense' })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Confirm receipt' })).not.toBeInTheDocument();
   });
+
+  it('keeps invalid photos out of the review screen', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (new URL(url, 'http://test.local').pathname === '/categories') return new Response(JSON.stringify([category]), { status: 200 });
+      return new Response(null, { status: 404 });
+    }));
+    await mount();
+
+    await userEvent.upload(screen.getByLabelText('Upload photo'), new File(['text'], 'notes.txt', { type: 'text/plain' }), { applyAccept: false });
+
+    expect(screen.getByText('Must be a JPEG, PNG, WebP or HEIC image.')).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Check receipt photo' })).not.toBeInTheDocument();
+  });
 });
