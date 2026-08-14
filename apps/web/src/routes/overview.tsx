@@ -15,6 +15,7 @@ import {
 import { describeFailure } from "@/api/messages";
 import { CLIENT_ROUTES, confirmReceiptPath } from "@/client-routes";
 import { TabBar } from "@/components/tab-bar";
+import { InstallAppButton } from "@/components/install-app";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -108,7 +109,7 @@ export function OverviewScreen({
     <main className="mx-auto min-h-dvh w-full max-w-xl overflow-x-hidden px-4 pb-[calc(5.5rem+env(safe-area-inset-bottom))]">
       <header className="flex items-center justify-between gap-3 border-b py-4 dark:border-border">
         <div><h1 className="font-heading text-lg font-semibold">Overview</h1><p className="text-sm text-muted-foreground">Your monthly spending summary</p></div>
-        <Link to={CLIENT_ROUTES.settings} className="flex min-h-11 items-center rounded-lg px-3 text-sm font-medium text-muted-foreground hover:bg-muted focus-visible:ring-3 focus-visible:ring-ring/50">Settings</Link>
+        <div className="flex items-center gap-1"><InstallAppButton /><Link to={CLIENT_ROUTES.settings} className="flex min-h-11 items-center rounded-lg px-3 text-sm font-medium text-muted-foreground hover:bg-muted focus-visible:ring-3 focus-visible:ring-ring/50">Settings</Link></div>
       </header>
       {error && (
         <Alert variant="destructive" role="alert" className="mt-4">

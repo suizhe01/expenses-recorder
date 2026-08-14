@@ -35,6 +35,8 @@ describe('add expense', () => {
     await mount();
     const camera = screen.getByLabelText('Take photo');
     expect(camera).toHaveAttribute('capture', 'environment');
+    expect(camera).toHaveAttribute('accept', 'image/*');
+    expect(screen.getByLabelText('Upload photo')).toHaveAttribute('accept', 'image/*');
     await userEvent.upload(screen.getByLabelText('Upload photo'), new File(['jpeg'], 'retry.jpg', { type: 'image/jpeg' }));
     expect(await screen.findByText('Could not reach the server. Check your connection.')).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: 'Retry' }));
